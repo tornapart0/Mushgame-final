@@ -1,0 +1,461 @@
+# Story, economy, movement, UI, and persistence regression tests.
+import os
+import unittest
+import tempfile
+import json
+from unittest.mock import patch
+from pathlib import Path
+os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
+os.environ.setdefault("SDL_AUDIODRIVER", "dummy")
+import pygame
+from mylang.compiler import translate
+
+SOURCE = Path(__file__).with_name("main.mylang")
+namespace = {"__name__": "mushgame_tests", "__file__": str(SOURCE)}
+exec(translate(SOURCE.read_text(encoding="utf-8")).code, namespace)
+Story = namespace["Story"]
+Game = namespace["Game"]
+
+class StoryTests(unittest.TestCase)
+{
+    @classmethod
+    def setUpClass(cls)
+    {
+        cls.directory = tempfile.TemporaryDirectory()
+        namespace["SAVE"] = Path(cls.directory.name) / "save.json"
+        cls.game = Game(true)
+    }
+
+    @classmethod
+    def tearDownClass(cls)
+    {
+        pygame.quit()
+        cls.directory.cleanup()
+    }
+
+    def setUp(self)
+    {
+        self.story = Story()
+        self.game.story = self.story
+        self.game.mode = "play"
+        self.game.dialogue = None
+        self.game.transition = 0
+    }
+
+    def meal(self)
+    {
+        s = self.story
+        s.refill_customers()
+        c = s.customers[0]
+        s.prep(c["order"])
+        s.use_stove()
+        s.update(8)
+        s.use_stove()
+        ok, message = s.serve(c["id"])
+        self.assertTrue(ok, message)
+        s.update(0)
+    }
+
+    def advance(self)
+    {
+        s = self.story
+        for _ in range(3)
+        {
+            self.meal()
+        }
+        self.assertTrue(s.buy("solar")[0])
+        s.update(0)
+        self.assertEqual(s.chapter, 1)
+        self.game.act("jun_petition")
+        self.game.act("mira_petition")
+        for _ in range(3)
+        {
+            self.meal()
+        }
+        self.assertTrue(s.buy("garden")[0])
+        s.update(0)
+        self.assertEqual(s.chapter, 2)
+        self.game.act("permit_coop")
+        self.game.act("appointment")
+        self.game.close_dialogue()
+        s.update(0)
+        self.assertEqual(s.chapter, 3)
+    }
+
+    def test_complete_commons_story_without_cheating_coins(self)
+    {
+        s = self.story
+        self.advance()
+        for _ in range(6)
+        {
+            self.meal()
+        }
+        self.assertTrue(s.buy("battery")[0])
+        self.game.act("energy_plan")
+        self.game.act("food_plan")
+        self.game.act("route_public")
+        for reform in ("energy", "food", "transit")
+        {
+            self.assertTrue(all(done for label, done in self.game.requirements(reform)))
+            self.game.committee(reform)
+            self.assertIn("DEBATE", self.game.dialogue["subtitle"])
+            self.game.act({"energy": "energy_public", "food": "food_commons", "transit": "transit_open"}[reform])
+        }
+        self.game.sable_dialogue()
+        self.assertEqual(len(self.game.dialogue["options"]), 3)
+        self.game.act("charter_commons")
+        self.assertEqual(s.chapter, 4)
+        self.assertEqual(s.flags["ending"], "commons")
+        self.assertGreaterEqual(s.coins, 0)
+        self.assertEqual(s.served, 12)
+    }
+
+    def test_corporate_choices_remain_playable_and_remembered(self)
+    {
+        self.advance()
+        self.game.act("permit_sponsor")
+        for _ in range(6)
+        {
+            self.meal()
+        }
+        self.assertTrue(self.story.buy("battery")[0])
+        for action in ("energy_plan", "food_plan", "route_control", "energy_corporate", "food_contract", "transit_gated", "charter_renew")
+        {
+            self.game.act(action)
+        }
+        self.assertEqual(self.story.flags["ending"], "renew")
+        self.assertFalse(self.story.flags["transit_public"])
+        self.assertEqual(len(self.story.reforms), 3)
+    }
+
+    def test_incorrect_dish_is_not_lost_and_can_be_shared(self)
+    {
+        s = self.story
+        customer = s.customers[0]
+        s.carry = "toast" if customer["order"] == "broth" else "broth"
+        coins = s.coins
+        ok, _ = s.serve(customer["id"])
+        self.assertFalse(ok)
+        self.assertEqual(s.coins, coins)
+        self.assertIsNotNone(s.carry)
+        self.game.act("donate")
+        self.assertIsNone(s.carry)
+        self.assertEqual(s.flags["donations"], 1)
+    }
+
+    def test_locked_recipe_and_insufficient_funds(self)
+    {
+        self.story.prep("garden")
+        self.assertIsNone(self.story.prepared)
+        ok, _ = self.story.buy("battery")
+        self.assertFalse(ok)
+        self.assertEqual(self.story.coins, 25)
+    }
+
+    def test_cooking_speed_and_ready_dish(self)
+    {
+        s = self.story
+        s.upgrades = ["solar", "battery"]
+        s.prep("broth")
+        s.use_stove()
+        self.assertAlmostEqual(s.cook_remaining, 2.24)
+        s.update(2.25)
+        s.use_stove()
+        self.assertEqual(s.carry, "broth")
+        self.assertIsNone(s.cooking)
+    }
+
+    def test_extra_preparation_can_wait_while_meal_is_served(self)
+    {
+        s = self.story
+        s.prep("broth")
+        s.use_stove()
+        s.prep("toast")
+        s.update(5)
+        s.use_stove()
+        self.assertEqual(s.carry, "broth")
+        self.assertEqual(s.prepared, "toast")
+        self.assertTrue(s.serve(s.customers[0]["id"])[0])
+        s.use_stove()
+        self.assertEqual(s.cooking, "toast")
+    }
+
+    def test_remaining_customers_keep_their_seats(self)
+    {
+        s = self.story
+        before = {c["id"]: c["seat"] for c in s.customers}
+        self.meal()
+        for c in s.customers
+        {
+            if c["id"] in before
+            {
+                self.assertEqual(c["seat"], before[c["id"]])
+            }
+        }
+        s.refill_customers()
+        self.assertEqual(set(c["seat"] for c in s.customers), set((0, 1, 2)))
+    }
+
+    def test_clinic_favor_is_once_only_and_does_not_remove_other_orders(self)
+    {
+        self.story.carry = "broth"
+        self.game.mira_dialogue()
+        self.assertEqual(self.game.dialogue["options"][0]["action"], "clinic")
+        self.game.act("clinic")
+        self.assertEqual(self.story.coins, 55)
+        self.assertEqual(self.story.trust, 2)
+        self.assertEqual(len(self.story.customers), 3)
+        self.story.carry = "broth"
+        self.game.act("clinic")
+        self.assertEqual(self.story.coins, 55)
+        self.assertEqual(self.story.carry, "broth")
+    }
+
+    def test_commons_charter_removes_previous_gates_and_private_metering(self)
+    {
+        self.story.reforms = ["energy", "food", "transit"]
+        self.story.flags.update({"transit_gated": true, "food_contract": true, "energy_corporate": true})
+        self.game.act("charter_commons")
+        for flag in ("transit_gated", "food_contract", "energy_corporate")
+        {
+            self.assertFalse(self.story.flags[flag])
+        }
+    }
+
+    def test_pause_stops_stove_and_world(self)
+    {
+        self.story.prep("broth")
+        self.story.use_stove()
+        self.game.mode = "pause"
+        before = self.story.cook_remaining
+        self.game.update(.05)
+        self.assertEqual(self.story.cook_remaining, before)
+    }
+
+    def test_save_round_trip_with_pending_orders(self)
+    {
+        s = self.story
+        s.prep("toast")
+        s.use_stove()
+        s.location = "district"
+        s.player.update(810, 990)
+        s.flags["jun_signature"] = true
+        self.assertTrue(s.save())
+        restored = Story()
+        self.assertTrue(restored.load())
+        self.assertEqual(restored.serialize(), s.serialize())
+    }
+
+    def test_corrupt_save_returns_to_new_story(self)
+    {
+        namespace["SAVE"].write_text("broken json")
+        self.assertFalse(Story().load())
+    }
+
+    def test_malformed_save_does_not_partially_mutate_state(self)
+    {
+        s = self.story
+        for broken in ("customers", "player", "coins", "upgrades", "flags")
+        {
+            data = s.serialize()
+            data["coins"] = 987
+            data[broken] = None
+            namespace["SAVE"].write_text(json.dumps(data))
+            restored = Story()
+            self.assertFalse(restored.load(), broken)
+            self.assertEqual(restored.coins, 25)
+            self.assertEqual(restored.chapter, 0)
+        }
+    }
+
+    def test_keyboard_dialogue_choices_and_focus_pause(self)
+    {
+        g = self.game
+        g.begin(true)
+        self.assertEqual(g.mode, "dialogue")
+        g.handle_event(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_1))
+        self.assertEqual(g.dialogue["speaker"], "Nori")
+        g.handle_event(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_RETURN))
+        self.assertEqual(g.mode, "play")
+        g.handle_event(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_j))
+        self.assertEqual(g.mode, "journal")
+        g.handle_event(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_3))
+        self.assertEqual(g.journal_tab, 2)
+        g.handle_event(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_ESCAPE))
+        self.assertEqual(g.mode, "play")
+        g.handle_event(pygame.event.Event(pygame.WINDOWFOCUSLOST))
+        self.assertEqual(g.mode, "pause")
+        g.handle_event(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_ESCAPE))
+        self.assertEqual(g.mode, "play")
+    }
+
+    def test_wasd_moves_the_player_in_a_real_frame(self)
+    {
+        g = self.game
+        keys = {key: false for key in (pygame.K_a, pygame.K_s, pygame.K_d, pygame.K_w, pygame.K_LEFT, pygame.K_RIGHT, pygame.K_UP, pygame.K_DOWN, pygame.K_LSHIFT, pygame.K_RSHIFT)}
+        keys[pygame.K_d] = true
+        keys[pygame.K_s] = true
+        before = self.story.player.copy()
+        with patch.object(pygame.key, "get_pressed", return_value=keys)
+        {
+            g.update(.04)
+        }
+        self.assertAlmostEqual(before.distance_to(self.story.player), 9)
+    }
+
+    def test_mouse_choices_work_after_window_scaling(self)
+    {
+        g = self.game
+        g.mode = "dialogue"
+        g.talk("Test", "Click the option.", [g.option("Close", "close")])
+        g.draw()
+        box, action, enabled = g.buttons[0]
+        ww, wh = g.window.get_size()
+        scale = min(ww / namespace["W"], wh / namespace["H"])
+        pos = (int(box.centerx * scale + (ww - namespace["W"] * scale) / 2), int(box.centery * scale + (wh - namespace["H"] * scale) / 2))
+        g.handle_event(pygame.event.Event(pygame.MOUSEBUTTONDOWN, pos=pos, button=1))
+        self.assertEqual(g.mode, "play")
+    }
+
+    def test_journal_controls_and_disabled_upgrade_cannot_spend(self)
+    {
+        g = self.game
+        g.story.player.update(1340, 590)
+        g.interact()
+        self.assertEqual(g.mode, "dialogue")
+        self.assertFalse(g.dialogue["options"][0]["enabled"])
+        g.handle_event(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_1))
+        self.assertEqual(g.story.coins, 25)
+        self.assertEqual(g.story.upgrades, [])
+    }
+
+    def test_waypoint_routes_between_all_scenes(self)
+    {
+        g = self.game
+        s = self.story
+        s.chapter = 2
+        s.flags["permit"] = true
+        target, label = g.waypoint()
+        self.assertEqual(target["key"], "door")
+        s.location = "district"
+        target, label = g.waypoint()
+        self.assertEqual(target["key"], "cityhall")
+        s.location = "hall"
+        target, label = g.waypoint()
+        self.assertEqual(target["key"], "sable")
+        s.carry = s.customers[0]["order"]
+        target, label = g.waypoint()
+        self.assertEqual(target["key"], "exit")
+    }
+
+    def test_move_cannot_cross_counter_or_world_edge(self)
+    {
+        s = self.story
+        s.player.update(400, 490)
+        for _ in range(20)
+        {
+            namespace["move_player"](s, pygame.Vector2(0, -10))
+        }
+        self.assertGreaterEqual(s.player.y, 478)
+        s.player.update(230, 700)
+        namespace["move_player"](s, pygame.Vector2(-1000, 0))
+        self.assertGreaterEqual(s.player.x, 237)
+    }
+
+    def test_each_fixture_has_reachable_interaction_point(self)
+    {
+        for location in ("kitchen", "district", "hall")
+        {
+            s = self.story
+            s.location = location
+            for fixture in namespace["fixtures"](location)
+            {
+                reachable = false
+                for dx in range(-70, 71, 35)
+                {
+                    for dy in range(-70, 71, 35)
+                    {
+                        point = pygame.Vector2(fixture["pos"]) + pygame.Vector2(dx, dy)
+                        body = pygame.Rect(point.x - 15, point.y - 18, 30, 28)
+                        inside = namespace["walk_bounds"](location).contains(body)
+                        clear = not any(body.colliderect(box) for box in namespace["collisions"](location))
+                        if inside and clear and point.distance_to(fixture["pos"]) < 112
+                        {
+                            reachable = true
+                        }
+                    }
+                }
+                self.assertTrue(reachable, fixture["key"])
+            }
+        }
+    }
+
+    def test_render_all_locations_chapters_and_overlays(self)
+    {
+        g = self.game
+        s = self.story
+        for chapter in range(5)
+        {
+            s.chapter = chapter
+            s.upgrades = list(namespace["UPGRADES"]) if chapter >= 2 else []
+            s.reforms = ["energy", "food", "transit"] if chapter == 4 else []
+            for location in ("kitchen", "district", "hall")
+            {
+                s.location = location
+                s.player = pygame.Vector2(namespace["walk_bounds"](location).center)
+                g.mode = "play"
+                g.update(0)
+                g.draw()
+            }
+        }
+        for mode in ("title", "pause", "journal")
+        {
+            g.mode = mode
+            for tab in range(3)
+            {
+                g.journal_tab = tab
+                g.draw()
+            }
+        }
+        g.talk("Layout test", "A longer paragraph to verify dialogue wrapping. " * 8, [g.option("An available option", "close"), g.option("An unavailable option", "close", false)], "TEST")
+        g.draw()
+    }
+    def test_story_dialogue_choices_fit_the_screen(self)
+    {
+        g = self.game
+        for chapter in range(5)
+        {
+            self.story.chapter = chapter
+            self.story.flags.update(appointment=true, energy_plan=true, food_plan=true, transit_plan=true, petition=true)
+            self.story.upgrades = ["solar", "garden", "water", "battery"]
+            self.story.served = 12
+            self.story.reforms = ["energy", "food", "transit"] if chapter == 4 else []
+            for dialogue in [g.jun_dialogue, g.mira_dialogue, g.tess_dialogue, g.vale_dialogue, g.sable_dialogue]
+            {
+                dialogue()
+                g.draw()
+                for box, action, enabled in g.buttons
+                {
+                    self.assertLessEqual(box.bottom, 760)
+                    self.assertGreaterEqual(box.top, 0)
+                }
+            }
+            for kind in ["energy", "food", "transit"]
+            {
+                g.committee(kind)
+                g.draw()
+                for box, action, enabled in g.buttons
+                {
+                    self.assertLessEqual(box.bottom, 760)
+                }
+            }
+        }
+    }
+}
+
+suite = unittest.defaultTestLoader.loadTestsFromTestCase(StoryTests)
+result = unittest.TextTestRunner(verbosity=2).run(suite)
+if not result.wasSuccessful()
+{
+    raise SystemExit(1)
+}

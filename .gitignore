@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+.venv/
+artifacts/
+.DS_Store
+mushgame-save.json
+mushgame-save.tmp
+dist/
+build/
+*.egg-info/
