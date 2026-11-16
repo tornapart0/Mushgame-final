@@ -17,7 +17,7 @@ classifiers = [
 ]
 
 [project.urls]
-Source = "https://github.com/tornapart0/Mushgame"
+Source = "https://github.com/tornapart0/Mushgame-final"
 
 [project.scripts]
 mushgame-demo = "mushgame_demo:main"
