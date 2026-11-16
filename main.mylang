@@ -1,0 +1,2793 @@
+# MUSHGAME: THE LAST LITTLE SUN
+# Entire game written in Tay's Sensible Lang, rendered with Pygame.
+import pygame
+import math
+import random
+import json
+import sys
+import array
+import os
+from pathlib import Path
+
+W = 1280
+H = 800
+SAVE = Path(os.environ["MUSHGAME_SAVE_DIR"]) / "mushgame-save.json" if os.environ.get("MUSHGAME_SAVE_DIR") else Path(__file__).with_name("mushgame-save.json")
+VERSION = 2
+CREAM = (245, 231, 190)
+INK = (26, 40, 43)
+MINT = (144, 216, 164)
+GOLD = (248, 194, 102)
+PINK = (235, 135, 157)
+TEAL = (84, 169, 156)
+
+RECIPES = {
+    "broth": {"name": "Forest broth", "price": 18, "time": 4.0, "color": (216, 156, 80), "description": "Woodland caps, wild thyme, a little warmth."},
+    "toast": {"name": "Cap on toast", "price": 22, "time": 5.0, "color": (212, 122, 72), "description": "Golden mushrooms on thick sourdough."},
+    "garden": {"name": "Rooftop bowl", "price": 28, "time": 4.5, "color": (138, 201, 115), "description": "Fresh greens grown above the smog."},
+    "tea": {"name": "Sunflower tea", "price": 16, "time": 3.0, "color": (236, 191, 82), "description": "Sun-warmed water and fragrant petals."}
+}
+UPGRADES = {
+    "solar": {"name": "Solar stove", "cost": 45, "description": "A rooftop collector powers the hob. Cooking is 30% faster. The city notices."},
+    "garden": {"name": "Living roof", "cost": 65, "description": "Plant the roof with edible greens. Unlock Rooftop bowl and a place for the neighborhood to breathe."},
+    "water": {"name": "Rainwater loop", "cost": 80, "description": "A reed-filter cistern catches every drop. Unlock Sunflower tea. Serve every customer for 4 extra coins."},
+    "battery": {"name": "Community battery", "cost": 95, "description": "Store sunlight and share it after dark. Cooking is another 20% faster. A model for the city's grid."}
+}
+NAMES = ["Rue", "Aster", "Moss", "Ivo", "Clover", "Bram", "Fern", "Orin", "Sable", "Wren", "Dew", "Sol"]
+CUSTOMER_LINES = [
+    "It smells like the forest in here. I had forgotten that smell.",
+    "They put another tower where my morning sun used to be.",
+    "My shift starts soon. This little place makes the city bearable.",
+    "Your grandmother once fed me when I couldn't pay.",
+    "There are seedlings growing between the tram tracks. Stubborn things.",
+    "The city could use more places where people know your name.",
+    "I'm taking a bowl home for someone who can't make the stairs.",
+    "The rain sounds different on those metal roofs outside."
+]
+AFTER_LINES = [
+    "I ate tomatoes from a roof I used to walk past without looking up.",
+    "The air smells like rain again. Real rain, not the factories.",
+    "I brought my child to see the sun garden. We stayed all afternoon.",
+    "Luma would have loved this. She always said a kitchen could change a city.",
+    "My neighbor helped wire our solar roof. We celebrated with soup.",
+    "The towers look different with leaves on their balconies.",
+    "Somebody planted flowers along the canal. Nobody asked permission.",
+    "We have more work to do. But now I can picture the future."
+]
+CHAPTERS = ["A kitchen, a seed", "When the towers rise", "A place at the table", "The city we choose", "The last little sun"]
+
+# Drawing helpers. No external images, fonts, or audio files.
+def rect(surface, color, box, radius=0, width=0)
+{
+    pygame.draw.rect(surface, color, pygame.Rect(box), width, border_radius=radius)
+}
+
+def ellipse(surface, color, box, width=0)
+{
+    pygame.draw.ellipse(surface, color, pygame.Rect(box), width)
+}
+
+def line(surface, color, a, b, width=1)
+{
+    pygame.draw.line(surface, color, a, b, width)
+}
+
+def mix(a, b, amount)
+{
+    return tuple(int(a[i] + (b[i] - a[i]) * amount) for i in range(3))
+}
+
+def wrap(font, message, width)
+{
+    result = []
+    for paragraph in message.split("\n")
+    {
+        current = ""
+        for word in paragraph.split()
+        {
+            trial = current + (" " if current else "") + word
+            if font.size(trial)[0] > width and current
+            {
+                result.append(current)
+                current = word
+            }
+            else
+            {
+                current = trial
+            }
+        }
+        result.append(current)
+    }
+    return result
+}
+
+def lettering(surface, font, message, pos, color=CREAM, center=false)
+{
+    image = font.render(str(message), true, color)
+    destination = image.get_rect(center=pos) if center else image.get_rect(topleft=pos)
+    surface.blit(image, destination)
+    return destination
+}
+
+def paragraphs(surface, font, message, pos, width, color=CREAM, spacing=7)
+{
+    y = pos[1]
+    for part in wrap(font, message, width)
+    {
+        lettering(surface, font, part, (pos[0], y), color)
+        y += font.get_linesize() + spacing
+    }
+    return y
+}
+
+def leaf(surface, pos, size, color, angle=0)
+{
+    x, y = pos
+    points = [(x - size, y), (x, y - size * 0.55), (x + size, y), (x, y + size * 0.55)]
+    if angle
+    {
+        points = [(x + (px - x) * math.cos(angle) - (py - y) * math.sin(angle), y + (px - x) * math.sin(angle) + (py - y) * math.cos(angle)) for px, py in points]
+    }
+    pygame.draw.polygon(surface, color, points)
+    line(surface, mix(color, CREAM, 0.25), (x - size * 0.5, y), (x + size * 0.5, y))
+}
+
+def plant(surface, x, y, scale=1, pot=true, color=(110, 164, 107))
+{
+    if pot
+    {
+        pygame.draw.polygon(surface, (167, 104, 78), [(x - 13 * scale, y - 6 * scale), (x + 13 * scale, y - 6 * scale), (x + 9 * scale, y + 14 * scale), (x - 9 * scale, y + 14 * scale)])
+        rect(surface, (197, 132, 91), (x - 15 * scale, y - 9 * scale, 30 * scale, 6 * scale), 2)
+    }
+    line(surface, color, (x, y), (x, y - 44 * scale), max(2, int(3 * scale)))
+    for offset, side in [(13, -1), (25, 1), (38, -1)]
+    {
+        leaf(surface, (x + side * 9 * scale, y - offset * scale), 13 * scale, color, side * 0.5)
+    }
+}
+
+def mushroom(surface, x, y, cap=(222, 119, 96), size=1, time=0, moving=false, direction=1, apron=false, robot=false)
+{
+    bob = math.sin(time * 11) * 2 if moving else math.sin(time * 2) * 1
+    y += bob
+    ellipse(surface, (26, 35, 39), (x - 22 * size, y - 5 * size, 44 * size, 14 * size))
+    step = math.sin(time * 12) * 4 if moving else 0
+    ellipse(surface, (100, 74, 62), (x - 15 * size, y - 7 * size + step, 14 * size, 11 * size))
+    ellipse(surface, (100, 74, 62), (x + 2 * size, y - 7 * size - step, 14 * size, 11 * size))
+    rect(surface, (231, 219, 181), (x - 16 * size, y - 44 * size, 32 * size, 40 * size), int(13 * size))
+    if apron
+    {
+        rect(surface, (97, 156, 129), (x - 13 * size, y - 25 * size, 26 * size, 19 * size), 4)
+        line(surface, (224, 225, 177), (x - 9 * size, y - 20 * size), (x + 9 * size, y - 20 * size), 2)
+        rect(surface, (76, 126, 110), (x - 6 * size, y - 16 * size, 12 * size, 7 * size), 2)
+    }
+    ellipse(surface, (123, 80, 68), (x - 34 * size, y - 48 * size, 68 * size, 17 * size))
+    ellipse(surface, cap, (x - 36 * size, y - 73 * size, 72 * size, 39 * size))
+    ellipse(surface, mix(cap, CREAM, 0.13), (x - 27 * size, y - 68 * size, 40 * size, 20 * size))
+    for dx, dy, radius in [(-17, -54, 5), (7, -63, 6), (23, -49, 4), (-3, -48, 4)]
+    {
+        ellipse(surface, CREAM, (x + (dx - radius) * size, y + (dy - radius) * size, radius * 2 * size, radius * 1.45 * size))
+    }
+    eye_y = y - 32 * size
+    for dx in (-6, 6)
+    {
+        pygame.draw.circle(surface, INK, (int(x + (dx + direction * 1.5) * size), int(eye_y)), max(2, int(2.5 * size)))
+    }
+    pygame.draw.arc(surface, (125, 80, 66), (x - 4 * size, y - 29 * size, 9 * size, 7 * size), math.pi, math.tau, 2)
+    line(surface, (231, 219, 181), (x - 16 * size, y - 23 * size), (x - 24 * size, y - 12 * size), max(2, int(5 * size)))
+    line(surface, (231, 219, 181), (x + 16 * size, y - 23 * size), (x + 24 * size, y - 12 * size), max(2, int(5 * size)))
+    if robot
+    {
+        rect(surface, (70, 154, 185), (x - 13 * size, y - 39 * size, 26 * size, 13 * size), 4)
+        line(surface, (170, 239, 227), (x - 9 * size, y - 33 * size), (x + 9 * size, y - 33 * size), 2)
+    }
+}
+
+def dish(surface, x, y, recipe, scale=1)
+{
+    color = RECIPES[recipe]["color"]
+    ellipse(surface, (30, 43, 44), (x - 19 * scale, y + 3 * scale, 38 * scale, 12 * scale))
+    ellipse(surface, CREAM, (x - 20 * scale, y - 7 * scale, 40 * scale, 18 * scale))
+    ellipse(surface, color, (x - 15 * scale, y - 4 * scale, 30 * scale, 12 * scale))
+    for dx, dy in [(-6, 0), (6, 2), (1, -2)]
+    {
+        leaf(surface, (x + dx * scale, y + dy * scale), 4 * scale, (117, 169, 100))
+    }
+}
+
+class Audio
+{
+    def __init__(self)
+    {
+        self.enabled = true
+        self.sounds = {}
+        self.available = pygame.mixer.get_init() is not None
+        if self.available
+        {
+            sound_notes = {"click": [440, 660], "serve": [523, 659, 784], "upgrade": [392, 523, 659, 784], "chapter": [330, 440, 523, 659], "error": [220, 196]}
+            for name, frequencies in sound_notes.items()
+            {
+                self.sounds[name] = self.tone(frequencies, 0.095)
+            }
+            self.music = self.ambient()
+            self.music.set_volume(0.15)
+            self.channel = self.music.play(loops=-1)
+        }
+    }
+
+    def tone(self, notes, duration)
+    {
+        rate = pygame.mixer.get_init()[0]
+        samples = array.array("h")
+        for frequency in notes
+        {
+            count = int(duration * rate)
+            for i in range(count)
+            {
+                envelope = math.sin(math.pi * i / count) ** 2
+                value = int(math.sin(math.tau * frequency * i / rate) * 7000 * envelope)
+                samples.extend((value, value))
+            }
+        }
+        return pygame.mixer.Sound(buffer=samples)
+    }
+
+    def ambient(self)
+    {
+        rate = pygame.mixer.get_init()[0]
+        samples = array.array("h")
+        chords = [(130.81, 164.81, 196), (110, 130.81, 164.81), (87.31, 130.81, 174.61), (98, 146.83, 196)]
+        count = int(rate * 1.8)
+        for chord in chords
+        {
+            for i in range(count)
+            {
+                t = i / rate
+                envelope = math.sin(math.pi * i / count) ** 2
+                value = int(sum(math.sin(math.tau * f * t) for f in chord) * 1500 * envelope)
+                samples.extend((value, value))
+            }
+        }
+        return pygame.mixer.Sound(buffer=samples)
+    }
+
+    def play(self, name)
+    {
+        if self.available and self.enabled
+        {
+            self.sounds[name].play()
+        }
+    }
+
+    def toggle(self)
+    {
+        self.enabled = not self.enabled
+        if self.available and self.channel
+        {
+            self.channel.set_volume(0.15 if self.enabled else 0)
+        }
+    }
+}
+
+class Story
+{
+    def __init__(self, seed=17)
+    {
+        self.rng = random.Random(seed)
+        self.chapter = 0
+        self.coins = 25
+        self.served = 0
+        self.trust = 0
+        self.day = 1
+        self.upgrades = []
+        self.flags = {}
+        self.reforms = []
+        self.location = "kitchen"
+        self.player = pygame.Vector2(710, 530)
+        self.carry = None
+        self.prepared = None
+        self.cooking = None
+        self.cook_remaining = 0
+        self.customers = []
+        self.arrival = 0
+        self.notice = ""
+        self.notice_time = 0
+        self.next_customer = 0
+        self.total_played = 0
+        self.started = false
+        self.refill_customers()
+    }
+
+    def known_recipes(self)
+    {
+        recipes = ["broth", "toast"]
+        if "garden" in self.upgrades
+        {
+            recipes.append("garden")
+        }
+        if "water" in self.upgrades
+        {
+            recipes.append("tea")
+        }
+        return recipes
+    }
+
+    def refill_customers(self)
+    {
+        while len(self.customers) < 3
+        {
+            n = self.next_customer
+            recipes = self.known_recipes()
+            order = recipes[n % len(recipes)]
+            occupied = set(c.get("seat", i) for i, c in enumerate(self.customers))
+            seat = next(i for i in range(3) if i not in occupied)
+            self.customers.append({"id": n, "seat": seat, "name": NAMES[n % len(NAMES)], "order": order, "line": CUSTOMER_LINES[n % len(CUSTOMER_LINES)], "color": list([(210, 145, 110), (129, 155, 177), (161, 132, 170), (186, 167, 90)][n % 4])})
+            self.next_customer += 1
+        }
+    }
+
+    def notify(self, message)
+    {
+        self.notice = message
+        self.notice_time = 4.5
+    }
+
+    def update(self, dt)
+    {
+        self.total_played += dt
+        self.notice_time = max(0, self.notice_time - dt)
+        if self.cooking
+        {
+            self.cook_remaining = max(0, self.cook_remaining - dt)
+        }
+        if len(self.customers) < 3
+        {
+            self.arrival -= dt
+            if self.arrival <= 0
+            {
+                self.refill_customers()
+                self.arrival = 3
+            }
+        }
+        before = self.chapter
+        if self.chapter == 0 and self.served >= 3 and len(self.upgrades) >= 1
+        {
+            self.chapter = 1
+        }
+        if self.chapter == 1 and self.flags.get("petition") and self.served >= 6 and len(self.upgrades) >= 2
+        {
+            self.chapter = 2
+        }
+        if self.chapter == 2 and self.flags.get("appointment")
+        {
+            self.chapter = 3
+        }
+        if before != self.chapter
+        {
+            self.notify("Chapter " + str(self.chapter + 1) + ": " + CHAPTERS[self.chapter])
+        }
+        return before != self.chapter
+    }
+
+    def prep(self, recipe)
+    {
+        if self.carry or self.prepared
+        {
+            return "Your hands are full. Cook the prepared ingredients or serve your dish first."
+        }
+        if recipe not in self.known_recipes()
+        {
+            return "Build the matching roof upgrade to unlock this recipe."
+        }
+        self.prepared = recipe
+        return "Prepared " + RECIPES[recipe]["name"] + ". Take it to the stove."
+    }
+
+    def use_stove(self)
+    {
+        if self.cooking
+        {
+            if self.cook_remaining > 0
+            {
+                return "Still simmering. It will be ready in a moment."
+            }
+            if self.carry
+            {
+                return "Serve your dish before collecting another."
+            }
+            self.carry = self.cooking
+            self.cooking = None
+            return "Ready to serve: " + RECIPES[self.carry]["name"] + "."
+        }
+        if not self.prepared
+        {
+            return "Prepare ingredients at the chopping table first."
+        }
+        speed = (0.7 if "solar" in self.upgrades else 1) * (0.8 if "battery" in self.upgrades else 1)
+        self.cooking = self.prepared
+        self.prepared = None
+        self.cook_remaining = RECIPES[self.cooking]["time"] * speed
+        return "Cooking " + RECIPES[self.cooking]["name"] + ". You can move while it simmers."
+    }
+
+    def serve(self, customer_id)
+    {
+        customer = next((c for c in self.customers if c["id"] == customer_id), None)
+        if customer is None
+        {
+            return false, "They have already headed home."
+        }
+        if self.carry != customer["order"]
+        {
+            return false, customer["name"] + " ordered " + RECIPES[customer["order"]]["name"] + ". Your dish stays in your hands."
+        }
+        reward = RECIPES[self.carry]["price"] + (4 if "water" in self.upgrades else 0)
+        self.coins += reward
+        self.served += 1
+        if self.served % 3 == 0
+        {
+            self.trust += 1
+        }
+        self.carry = None
+        self.customers.remove(customer)
+        self.arrival = 2.5
+        return true, "+" + str(reward) + " coins. " + customer["name"] + " leaves with a warm meal."
+    }
+
+    def buy(self, key)
+    {
+        info = UPGRADES[key]
+        if key in self.upgrades
+        {
+            return false, "Already installed."
+        }
+        if self.coins < info["cost"]
+        {
+            return false, "You need " + str(info["cost"] - self.coins) + " more coins. A few meals will get you there."
+        }
+        self.coins -= info["cost"]
+        self.upgrades.append(key)
+        self.trust += 1
+        return true, info["name"] + " installed. Your little shop is changing."
+    }
+
+    def objective(self)
+    {
+        if self.chapter == 0
+        {
+            if self.served < 3
+            {
+                return "Feed the neighborhood", "Serve " + str(self.served) + "/3 customers. Prep, cook, then bring each dish to its customer."
+            }
+            return "Catch your first sunlight", "Buy a shop upgrade at the blueprint board."
+        }
+        if self.chapter == 1
+        {
+            if not self.flags.get("petition")
+            {
+                return "The city is growing", "Step outside. Talk to Jun and Mira about the new towers."
+            }
+            if self.served < 6
+            {
+                return "Keep a light in the window", "Serve " + str(self.served) + "/6 customers to show the council your kitchen matters."
+            }
+            return "Make a working example", "Install " + str(len(self.upgrades)) + "/2 shop upgrades."
+        }
+        if self.chapter == 2
+        {
+            if not self.flags.get("permit")
+            {
+                return "A knock from the council", "Find Inspector Vale in the neighborhood. Choose how to handle your permit."
+            }
+            return "A place at the table", "Visit City Hall. Councillor Sable has an offer for you."
+        }
+        if self.chapter == 3
+        {
+            if len(self.reforms) == 3
+            {
+                return "Write a new city charter", "Return to Sable in City Hall and choose the city's future."
+            }
+            return "Turn ideas into city policy", "Pass " + str(len(self.reforms)) + "/3 reforms. Talk to Tess, Mira, and Jun; consult your journal [J]."
+        }
+        return "A city that can breathe", "Explore the transformed neighborhood. Your kitchen is always open."
+    }
+
+    def serialize(self)
+    {
+        data = {"version": VERSION}
+        for key in ["chapter", "coins", "served", "trust", "day", "upgrades", "flags", "reforms", "location", "carry", "prepared", "cooking", "cook_remaining", "customers", "arrival", "next_customer", "total_played", "started"]
+        {
+            data[key] = getattr(self, key)
+        }
+        data["player"] = list(self.player)
+        return data
+    }
+
+    def save(self)
+    {
+        try
+        {
+            temporary = SAVE.with_suffix(".tmp")
+            temporary.write_text(json.dumps(self.serialize(), indent=2), encoding="utf-8")
+            temporary.replace(SAVE)
+            return true
+        }
+        except OSError
+        {
+            self.notify("Couldn't save here. Make sure the game folder is writable.")
+            return false
+        }
+    }
+
+    def load(self)
+    {
+        try
+        {
+            data = json.loads(SAVE.read_text(encoding="utf-8"))
+            required = ["version", "chapter", "coins", "served", "trust", "day", "upgrades", "flags", "reforms", "location", "carry", "prepared", "cooking", "cook_remaining", "customers", "arrival", "next_customer", "total_played", "started", "player"]
+            if not isinstance(data, dict) or any(key not in data for key in required)
+            {
+                return false
+            }
+            if data.get("version") != VERSION
+            {
+                return false
+            }
+            if not isinstance(data.get("coins"), int) or data["coins"] < 0 or type(data.get("chapter")) is not int or data.get("chapter") not in range(5)
+            {
+                return false
+            }
+            if data.get("location") not in ("kitchen", "district", "hall")
+            {
+                return false
+            }
+            for key in ["carry", "prepared", "cooking"]
+            {
+                if data.get(key) is not None and data[key] not in RECIPES
+                {
+                    return false
+                }
+            }
+            if not isinstance(data.get("flags"), dict) or not isinstance(data.get("upgrades"), list) or not isinstance(data.get("reforms"), list)
+            {
+                return false
+            }
+            if any(key not in UPGRADES for key in data["upgrades"]) or any(key not in ("energy", "food", "transit") for key in data["reforms"])
+            {
+                return false
+            }
+            if len(set(data["upgrades"])) != len(data["upgrades"]) or len(set(data["reforms"])) != len(data["reforms"])
+            {
+                return false
+            }
+            for key in ("coins", "served", "day", "next_customer")
+            {
+                if type(data[key]) is not int or data[key] < 0
+                {
+                    return false
+                }
+            }
+            if type(data["trust"]) is not int or type(data["started"]) is not bool
+            {
+                return false
+            }
+            for key in ("cook_remaining", "arrival", "total_played")
+            {
+                if type(data[key]) not in (int, float) or not math.isfinite(data[key]) or data[key] < 0
+                {
+                    return false
+                }
+            }
+            if not isinstance(data["customers"], list) or len(data["customers"]) > 3
+            {
+                return false
+            }
+            ids = set()
+            seats = set()
+            for customer in data["customers"]
+            {
+                if not isinstance(customer, dict) or any(key not in customer for key in ("id", "name", "order", "line", "color"))
+                {
+                    return false
+                }
+                if type(customer["id"]) is not int or customer["id"] < 0 or customer["id"] >= data["next_customer"] or customer["id"] in ids or customer["order"] not in RECIPES
+                {
+                    return false
+                }
+                ids.add(customer["id"])
+                seat = customer.get("seat", len(seats))
+                if type(seat) is not int or seat not in range(3) or seat in seats
+                {
+                    return false
+                }
+                seats.add(seat)
+                if not isinstance(customer["name"], str) or not isinstance(customer["line"], str)
+                {
+                    return false
+                }
+                color = customer["color"]
+                if not isinstance(color, list) or len(color) != 3 or any(type(c) is not int or not 0 <= c <= 255 for c in color)
+                {
+                    return false
+                }
+            }
+            if any(not isinstance(key, str) or type(value) not in (str, bool, int) for key, value in data["flags"].items())
+            {
+                return false
+            }
+            for key, value in data["flags"].items()
+            {
+                if key == "ending"
+                {
+                    if value not in ("commons", "renew")
+                    {
+                        return false
+                    }
+                }
+                elif key == "donations"
+                {
+                    if type(value) is not int or value < 0
+                    {
+                        return false
+                    }
+                }
+                elif type(value) is not bool
+                {
+                    return false
+                }
+            }
+            if not isinstance(data["player"], list) or len(data["player"]) != 2 or any(type(value) not in (int, float) or not math.isfinite(value) for value in data["player"])
+            {
+                return false
+            }
+            position = pygame.Vector2(data["player"])
+            bounds = walk_bounds(data["location"])
+            if not bounds.collidepoint(position)
+            {
+                return false
+            }
+            for key in required
+            {
+                value = data[key]
+                if key not in ("version", "player") and hasattr(self, key)
+                {
+                    setattr(self, key, value)
+                }
+            }
+            self.player = position
+            self.notice = "Welcome back, Nori. The kettle is still warm."
+            self.notice_time = 5
+            return true
+        }
+        except (OSError, ValueError, KeyError, TypeError)
+        {
+            return false
+        }
+    }
+}
+
+# World geometry is shared by rendering, collisions, and interaction.
+def scene_size(name)
+{
+    return {"kitchen": (1640, 1060), "district": (2200, 1300), "hall": (1700, 1100)}[name]
+}
+
+def walk_bounds(name)
+{
+    return {"kitchen": pygame.Rect(222, 350, 1196, 564), "district": pygame.Rect(105, 665, 1990, 505), "hall": pygame.Rect(220, 450, 1260, 550)}[name]
+}
+
+def fixtures(name)
+{
+    if name == "kitchen"
+    {
+        return [
+            {"key": "prep", "name": "Chopping table", "pos": (400, 495), "box": (310, 375, 180, 85), "kind": "prep"},
+            {"key": "stove", "name": "Stove", "pos": (720, 495), "box": (630, 375, 180, 85), "kind": "stove"},
+            {"key": "pantry", "name": "Recipe shelf", "pos": (1150, 490), "box": (1080, 365, 145, 80), "kind": "pantry"},
+            {"key": "upgrades", "name": "Shop blueprints", "pos": (1340, 590), "box": (1300, 475, 90, 75), "kind": "board"},
+            {"key": "door", "name": "Step outside", "pos": (1310, 850), "box": None, "kind": "door"},
+            {"key": "rest", "name": "Close up for the evening", "pos": (290, 830), "box": (230, 750, 110, 45), "kind": "rest"},
+            {"key": "luma", "name": "Grandma Luma's notebook", "pos": (1050, 840), "box": (1010, 745, 95, 45), "kind": "notebook"}
+        ]
+    }
+    if name == "district"
+    {
+        return [
+            {"key": "home", "name": "Your kitchen", "pos": (425, 795), "box": None, "kind": "home"},
+            {"key": "jun", "name": "Jun • neighborhood gardener", "pos": (800, 1020), "box": (774, 975, 52, 38), "kind": "jun"},
+            {"key": "mira", "name": "Mira • night-shift courier", "pos": (1180, 990), "box": (1154, 945, 52, 38), "kind": "mira"},
+            {"key": "tess", "name": "Tess • grid engineer", "pos": (1590, 1030), "box": (1564, 985, 52, 38), "kind": "tess"},
+            {"key": "vale", "name": "Inspector Vale", "pos": (1120, 750), "box": (1094, 705, 52, 38), "kind": "vale"},
+            {"key": "cityhall", "name": "City Hall", "pos": (1870, 750), "box": None, "kind": "cityhall"},
+            {"key": "memorial", "name": "The old sun garden", "pos": (650, 1130), "box": None, "kind": "memorial"}
+        ]
+    }
+    return [
+        {"key": "sable", "name": "Councillor Sable", "pos": (850, 610), "box": (790, 485, 120, 70), "kind": "sable"},
+        {"key": "energy", "name": "Energy committee", "pos": (410, 790), "box": (340, 675, 140, 70), "kind": "energy"},
+        {"key": "food", "name": "Food committee", "pos": (850, 875), "box": (780, 760, 140, 70), "kind": "food"},
+        {"key": "transit", "name": "Transit committee", "pos": (1290, 790), "box": (1220, 675, 140, 70), "kind": "transit"},
+        {"key": "exit", "name": "Return to the neighborhood", "pos": (850, 980), "box": None, "kind": "exit"},
+        {"key": "archive", "name": "City archive", "pos": (1410, 590), "box": (1355, 480, 90, 70), "kind": "archive"}
+    ]
+}
+
+def collisions(name)
+{
+    blocks = [pygame.Rect(f["box"]) for f in fixtures(name) if f["box"]]
+    if name == "kitchen"
+    {
+        blocks += [pygame.Rect(x - 55, 615, 110, 58) for x in (430, 720, 1010)]
+        blocks += [pygame.Rect(225, 555, 80, 120), pygame.Rect(1320, 680, 85, 80)]
+    }
+    return blocks
+}
+
+def move_player(story, delta)
+{
+    bounds = walk_bounds(story.location)
+    blocks = collisions(story.location)
+    for axis in (0, 1)
+    {
+        story.player[axis] += delta[axis]
+        body = pygame.Rect(story.player.x - 15, story.player.y - 18, 30, 28)
+        for obstacle in blocks
+        {
+            if body.colliderect(obstacle)
+            {
+                if axis == 0
+                {
+                    if delta.x > 0
+                    {
+                        story.player.x = obstacle.left - 15
+                    }
+                    elif delta.x < 0
+                    {
+                        story.player.x = obstacle.right + 15
+                    }
+                }
+                else
+                {
+                    if delta.y > 0
+                    {
+                        story.player.y = obstacle.top - 10
+                    }
+                    elif delta.y < 0
+                    {
+                        story.player.y = obstacle.bottom + 18
+                    }
+                }
+                body = pygame.Rect(story.player.x - 15, story.player.y - 18, 30, 28)
+            }
+        }
+    }
+    story.player.x = max(bounds.left + 15, min(bounds.right - 15, story.player.x))
+    story.player.y = max(bounds.top + 18, min(bounds.bottom - 10, story.player.y))
+}
+
+def panel(surface, box, color=(31, 47, 48), border=(86, 116, 101), radius=16)
+{
+    rect(surface, (11, 24, 28), (box[0] + 5, box[1] + 7, box[2], box[3]), radius)
+    rect(surface, color, box, radius)
+    rect(surface, border, box, radius, 1)
+}
+
+class WorldArt
+{
+    def __init__(self, fonts)
+    {
+        self.fonts = fonts
+        self.cache = {}
+    }
+
+    def background(self, story)
+    {
+        key = (story.location, story.chapter, tuple(story.upgrades), tuple(story.reforms))
+        if key not in self.cache
+        {
+            if len(self.cache) > 12
+            {
+                self.cache.clear()
+            }
+            surface = pygame.Surface(scene_size(story.location))
+            if story.location == "kitchen"
+            {
+                self.kitchen(surface, story)
+            }
+            elif story.location == "district"
+            {
+                self.district(surface, story)
+            }
+            else
+            {
+                self.hall(surface, story)
+            }
+            self.cache[key] = surface
+        }
+        return self.cache[key]
+    }
+
+    def window(self, surface, box, green=false)
+    {
+        x, y, w, h = box
+        rect(surface, (76, 93, 90), (x - 7, y - 7, w + 14, h + 14), 5)
+        rect(surface, (128, 174, 154) if green else (57, 76, 91), box, 3)
+        line(surface, (223, 189, 140), (x + w * 0.5, y), (x + w * 0.5, y + h), 7)
+        line(surface, (223, 189, 140), (x, y + h * 0.55), (x + w, y + h * 0.55), 7)
+        line(surface, (186, 214, 185), (x + 12, y + 14), (x + w * 0.45, y + 14), 3)
+        plant(surface, x + w * 0.75, y + h + 7, 0.6)
+    }
+
+    def solar(self, surface, x, y, width=130)
+    {
+        points = [(x, y), (x + width, y), (x + width - 15, y + 45), (x - 15, y + 45)]
+        pygame.draw.polygon(surface, (38, 84, 99), points)
+        pygame.draw.polygon(surface, (121, 183, 170), points, 3)
+        for i in range(1, 5)
+        {
+            line(surface, (91, 142, 154), (x + width * i / 5, y + 2), (x + width * i / 5 - 15, y + 43), 2)
+        }
+        line(surface, (91, 142, 154), (x - 8, y + 23), (x + width - 8, y + 23), 2)
+    }
+
+    def kitchen(self, surface, story)
+    {
+        surface.fill((23, 36, 37))
+        rect(surface, (18, 29, 31), (160, 180, 1320, 775), 20)
+        rect(surface, (112, 119, 93), (200, 220, 1240, 695), 8)
+        rect(surface, (179, 157, 112), (200, 220, 1240, 126), 8)
+        rect(surface, (108, 87, 66), (200, 335, 1240, 24))
+        rect(surface, (183, 169, 125), (205, 352, 1230, 562))
+        for y in range(360, 910, 44)
+        {
+            for x in range(210, 1430, 90)
+            {
+                offset = 45 if int(y / 44) % 2 else 0
+                line(surface, (165, 147, 105), (x + offset, y), (x + offset + 82, y), 1)
+                line(surface, (165, 147, 105), (x + offset, y), (x + offset, y + 42), 1)
+            }
+        }
+        rect(surface, (163, 100, 76), (500, 510, 620, 250), 18)
+        rect(surface, (186, 130, 93), (510, 520, 600, 230), 16, 2)
+        for x in range(530, 1100, 34)
+        {
+            line(surface, (173, 116, 84), (x, 528), (x, 742), 1)
+        }
+        self.window(surface, (270, 250, 165, 72), story.chapter == 0 or "energy" in story.reforms)
+        self.window(surface, (1110, 250, 170, 72), "garden" in story.upgrades)
+        if story.chapter == 0 or "energy" in story.reforms
+        {
+            sunlight = pygame.Surface(surface.get_size(), pygame.SRCALPHA)
+            pygame.draw.polygon(sunlight, (255, 211, 128, 24), [(278, 324), (428, 324), (705, 912), (382, 912)])
+            surface.blit(sunlight, (0, 0))
+        }
+        lettering(surface, self.fonts["title"], "THE LITTLE SUN", (805, 256), INK, true)
+        lettering(surface, self.fonts["small"], "warm meals • stubborn hope", (805, 297), (92, 78, 57), true)
+        # Hanging copper pots and herbs.
+        line(surface, (100, 80, 60), (510, 320), (950, 320), 4)
+        for x in (540, 590, 860, 920)
+        {
+            line(surface, (96, 78, 63), (x, 320), (x, 350), 3)
+            ellipse(surface, (163, 109, 71), (x - 18, 337, 36, 25))
+        }
+        for x in (650, 700, 750)
+        {
+            plant(surface, x, 333, 0.5, false)
+        }
+        # String lights make the home feel separate from the city outside.
+        for x in range(250, 1400, 90)
+        {
+            y = 215 + int(12 * math.sin(x * 0.005))
+            line(surface, (78, 76, 54), (x, y), (x + 90, 215 + int(12 * math.sin((x + 90) * 0.005))), 2)
+            pygame.draw.circle(surface, (237, 185, 99), (x, y + 8), 5)
+        }
+        # A pantry, plants, and a front door.
+        for x, y, size in [(250, 520, 1.2), (1380, 665, 1.2), (1200, 820, 1), (570, 850, 0.9)]
+        {
+            plant(surface, x, y, size)
+        }
+        rect(surface, (112, 146, 116), (1250, 806, 125, 102), 8)
+        rect(surface, (198, 177, 130), (1258, 814, 109, 86), 6, 3)
+        lettering(surface, self.fonts["small"], "OUTSIDE", (1310, 874), CREAM, true)
+        for x in (430, 720, 1010)
+        {
+            rect(surface, (114, 88, 62), (x - 58, 618, 116, 62), 12)
+            rect(surface, (214, 184, 126), (x - 60, 610, 120, 55), 12)
+            rect(surface, (227, 213, 169), (x - 33, 622, 65, 33), 4)
+            ellipse(surface, (125, 94, 68), (x - 17, 625, 35, 19))
+            plant(surface, x + 40, 635, 0.33)
+        }
+        rect(surface, (137, 112, 87), (224, 550, 82, 126), 7)
+        for y in range(562, 667, 30)
+        {
+            rect(surface, (199, 168, 112), (230, y, 70, 23), 4)
+            for x in (243, 270, 289)
+            {
+                pygame.draw.circle(surface, (158, 183, 116), (x, y + 11), 6)
+            }
+        }
+        # Installed technology is visible indoors too.
+        if "solar" in story.upgrades
+        {
+            self.solar(surface, 650, 174, 185)
+            line(surface, GOLD, (845, 201), (850, 364), 3)
+        }
+        if "garden" in story.upgrades
+        {
+            for x in range(330, 1300, 75)
+            {
+                plant(surface, x, 190, 0.7, false, (109, 166, 101))
+            }
+        }
+        if "water" in story.upgrades
+        {
+            rect(surface, (85, 139, 151), (1320, 680, 85, 80), 16)
+            rect(surface, (126, 184, 175), (1330, 698, 65, 35), 9)
+            line(surface, TEAL, (1350, 680), (1350, 390), 6)
+            lettering(surface, self.fonts["tiny"], "RAIN", (1360, 724), CREAM, true)
+        }
+        if "battery" in story.upgrades
+        {
+            rect(surface, (66, 90, 92), (885, 378, 70, 78), 10)
+            for y in range(392, 440, 13)
+            {
+                rect(surface, MINT, (902, y, 36, 6), 2)
+            }
+        }
+        lettering(surface, self.fonts["tiny"], "GRANDMA'S KITCHEN • EST. 2081", (820, 970), (149, 159, 135), true)
+    }
+
+    def tower(self, surface, box, color, seed, green=false)
+    {
+        x, y, width, height = box
+        rng = random.Random(seed)
+        rect(surface, mix(color, INK, 0.4), (x + 12, y + 8, width, height))
+        rect(surface, color, box)
+        rect(surface, mix(color, (100, 115, 131), 0.2), (x, y, width, 15))
+        for wx in range(int(x + 15), int(x + width - 12), 24)
+        {
+            for wy in range(int(y + 28), int(y + height - 8), 31)
+            {
+                lit = rng.random() > 0.43
+                tint = (139, 193, 162) if green else [(97, 134, 152), (191, 109, 152), (195, 157, 99)][rng.randrange(3)]
+                rect(surface, tint if lit else mix(color, INK, 0.2), (wx, wy, 9, 14), 1)
+            }
+        }
+        line(surface, (56, 70, 85), (x + width * 0.75, y), (x + width * 0.75, y + height), 3)
+        if green
+        {
+            self.solar(surface, x + 15, y - 15, max(50, width - 28))
+            for py in range(int(y + 60), int(y + height), 80)
+            {
+                line(surface, (80, 135, 98), (x + 9, py - 30), (x + 9, py + 30), 4)
+                for dy in (-20, 0, 20)
+                {
+                    leaf(surface, (x + 12, py + dy), 10, (111, 169, 119), 0.6)
+                }
+            }
+        }
+    }
+
+    def district(self, surface, story)
+    {
+        green = story.chapter == 4
+        amount = len(story.reforms) / 3
+        sky = (98, 145, 134) if green else [(128, 157, 143), (65, 89, 110), (48, 62, 87), (47, 63, 88)][min(story.chapter, 3)]
+        surface.fill(sky)
+        for y in range(650)
+        {
+            color = mix(sky, (215, 174, 132) if green or story.chapter == 0 else (116, 81, 111), y / 650 * 0.55)
+            line(surface, color, (0, y), (2200, y))
+        }
+        # The sun is gradually blocked by the city, then brought back into view.
+        pygame.draw.circle(surface, (224, 179, 126) if not green else (255, 214, 132), (680, 200), 64)
+        ellipse(surface, mix(sky, CREAM, 0.12), (900, 100, 480, 45))
+        ellipse(surface, mix(sky, CREAM, 0.08), (1400, 210, 370, 30))
+        tower_count = 6 + story.chapter * 3 if not green else 15
+        for i in range(tower_count)
+        {
+            x = (i * 173 + 43) % 2200
+            height = 170 + (i * 89) % (250 if story.chapter == 0 else 530)
+            self.tower(surface, (x, 640 - height, 110 + (i * 19) % 100, height), (44 + i % 3 * 7, 57 + i % 4 * 5, 73 + i % 3 * 5), i, green or "energy" in story.reforms)
+        }
+        if story.chapter in (1, 2)
+        {
+            for x, y in ((920, 75), (1570, 115))
+            {
+                line(surface, (171, 148, 97), (x, y), (x, 640), 9)
+                line(surface, (190, 166, 107), (x - 80, y + 12), (x + 245, y + 12), 8)
+                line(surface, (145, 133, 99), (x, y - 35), (x - 80, y + 10), 3)
+                line(surface, (145, 133, 99), (x, y - 35), (x + 245, y + 10), 3)
+                line(surface, (187, 171, 133), (x + 213, y + 15), (x + 213, y + 140), 2)
+                pygame.draw.arc(surface, (187, 171, 133), (x + 205, y + 135, 17, 17), 0, math.pi, 3)
+                for cy in range(y + 40, 630, 42)
+                {
+                    line(surface, (191, 165, 106), (x - 4, cy), (x + 4, cy + 28), 2)
+                }
+            }
+        }
+        # Sky bridges create an increasingly dense skyline.
+        if story.chapter >= 1
+        {
+            for x, y in [(640, 230), (1130, 320), (1510, 140)]
+            {
+                rect(surface, (63, 76, 91), (x, y, 220, 26), 3)
+                line(surface, (125, 91, 132), (x, y + 12), (x + 220, y + 12), 3)
+                if green
+                {
+                    for px in range(x, x + 220, 30)
+                    {
+                        plant(surface, px, y, 0.3, false)
+                    }
+                }
+            }
+            rect(surface, (36, 48, 68), (960, 220, 130, 50), 4)
+            lettering(surface, self.fonts["small"], "MORE. FASTER.", (1025, 242), PINK, true)
+            if green
+            {
+                rect(surface, (79, 112, 99), (960, 220, 130, 50), 4)
+                lettering(surface, self.fonts["small"], "ROOM TO GROW", (1025, 242), MINT, true)
+                if story.flags.get("energy_corporate")
+                {
+                    rect(surface, (56, 73, 91), (960, 220, 130, 50), 4)
+                    lettering(surface, self.fonts["small"], "HELIX CLEAN GRID", (1025, 242), PINK, true)
+                }
+            }
+        }
+        # Ground planes and reclaimed waterway.
+        rect(surface, (64, 77, 76) if not green else (92, 127, 101), (0, 635, 2200, 665))
+        rect(surface, (122, 126, 112), (85, 680, 2030, 470), 20)
+        for y in range(700, 1150, 50)
+        {
+            line(surface, (107, 111, 103), (110, y), (2085, y))
+            for x in range(120, 2100, 95)
+            {
+                line(surface, (107, 111, 103), (x, y), (x, y + 50))
+            }
+        }
+        rect(surface, (56, 68, 72), (0, 860, 2200, 76))
+        for x in range(0, 2200, 80)
+        {
+            rect(surface, (167, 163, 128), (x, 895, 36, 3))
+        }
+        rect(surface, (41, 85, 91), (0, 1180, 2200, 120))
+        for x in range(0, 2200, 75)
+        {
+            line(surface, (76, 131, 132), (x, 1215), (x + 45, 1215), 2)
+            line(surface, (76, 131, 132), (x + 20, 1250), (x + 60, 1250), 2)
+        }
+        # Nori's kitchen is small but gets visibly greener with every upgrade.
+        rect(surface, (115, 90, 74), (205, 500, 460, 235), 10)
+        rect(surface, (185, 158, 115), (218, 510, 434, 215), 8)
+        pygame.draw.polygon(surface, (101, 119, 93), [(180, 510), (425, 405), (688, 510)])
+        pygame.draw.polygon(surface, (140, 147, 107), [(180, 510), (425, 405), (688, 510)], 4)
+        self.window(surface, (260, 588, 115, 96), true)
+        self.window(surface, (478, 588, 115, 96), true)
+        rect(surface, (87, 126, 104), (388, 600, 77, 130), 5)
+        rect(surface, (237, 193, 115), (391, 540, 190, 35), 7)
+        lettering(surface, self.fonts["small"], "THE LITTLE SUN", (486, 556), INK, true)
+        rect(surface, (171, 137, 98), (390, 726, 74, 52), 5)
+        if "solar" in story.upgrades
+        {
+            self.solar(surface, 450, 455, 140)
+        }
+        if "garden" in story.upgrades
+        {
+            for x in range(230, 420, 36)
+            {
+                plant(surface, x, 491 - (x - 230) * 0.37, 0.55, false)
+            }
+            for x in (220, 655)
+            {
+                plant(surface, x, 730, 1.4)
+            }
+        }
+        if "water" in story.upgrades
+        {
+            rect(surface, (96, 158, 163), (640, 620, 35, 113), 8)
+            line(surface, TEAL, (660, 515), (660, 620), 5)
+        }
+        if "battery" in story.upgrades
+        {
+            rect(surface, (61, 97, 92), (220, 690, 50, 60), 5)
+            lettering(surface, self.fonts["tiny"], "SHARED", (245, 715), MINT, true)
+        }
+        # Monumental city hall, later softened by gardens.
+        rect(surface, (57, 68, 85), (1650, 455, 460, 235), 6)
+        rect(surface, (91, 105, 115), (1640, 470, 480, 35), 4)
+        for x in (1685, 1760, 1930, 2010)
+        {
+            rect(surface, (123, 134, 133), (x, 510, 28, 169), 3)
+        }
+        rect(surface, (28, 49, 64), (1820, 550, 100, 141), 4)
+        lettering(surface, self.fonts["heading"], "CITY HALL", (1870, 490), CREAM, true)
+        lettering(surface, self.fonts["tiny"], "ADMINISTRATION • ORDER • PROGRESS" if not green else "SUNLIGHT • COMMONS • CARE", (1870, 530), (172, 190, 187), true)
+        rect(surface, (93, 108, 108), (1760, 690, 220, 30), 4)
+        if green
+        {
+            self.solar(surface, 1760, 423, 220)
+            for x in (1660, 1710, 2040, 2090)
+            {
+                plant(surface, x, 680, 1.5)
+            }
+        }
+        # Neighborhood's familiar gathering places.
+        for x, y in [(750, 1060), (870, 1090), (1570, 1120), (2000, 1060)]
+        {
+            rect(surface, (80, 80, 67), (x, y, 80, 12), 3)
+            rect(surface, (178, 147, 102), (x, y - 8, 80, 12), 3)
+            for dx in (8, 64)
+            {
+                line(surface, (64, 72, 65), (x + dx, y + 3), (x + dx, y + 27), 4)
+            }
+        }
+        for x in (140, 730, 1430, 2090)
+        {
+            line(surface, (62, 83, 80), (x, 760), (x, 650), 7)
+            pygame.draw.circle(surface, GOLD if not green else MINT, (x, 638), 13)
+        }
+        rect(surface, (113, 100, 73), (480, 1070, 250, 80), 12)
+        if green or "food" in story.reforms
+        {
+            for x in range(510, 710, 35)
+            {
+                plant(surface, x, 1120, 0.8, false)
+            }
+        }
+        else
+        {
+            for x in (520, 590, 670)
+            {
+                line(surface, (110, 123, 85), (x, 1130), (x + 6, 1100), 3)
+            }
+        }
+        lettering(surface, self.fonts["small"], "SUN GARDEN", (605, 1073), CREAM, true)
+        if "transit" in story.reforms
+        {
+            for x in range(60, 2140, 180)
+            {
+                plant(surface, x, 1158, 0.65, false)
+            }
+            line(surface, (145, 184, 155), (0, 917), (2200, 917), 2)
+            if story.flags.get("transit_gated")
+            {
+                for x in (1070, 1290)
+                {
+                    rect(surface, (77, 99, 111), (x, 840, 16, 94), 3)
+                    pygame.draw.circle(surface, PINK, (x + 8, 854), 4)
+                }
+                rect(surface, (47, 66, 83), (1070, 833, 236, 20), 4)
+                lettering(surface, self.fonts["tiny"], "HELIX • ID REQUIRED", (1188, 841), PINK, true)
+            }
+        }
+        if "food" in story.reforms
+        {
+            for x in (860, 1400, 1540)
+            {
+                rect(surface, (121, 137, 95), (x, 680, 90, 40), 6)
+                for dx in (12, 40, 72)
+                {
+                    plant(surface, x + dx, 690, 0.45, false)
+                }
+            }
+        }
+    }
+
+    def hall(self, surface, story)
+    {
+        green = story.chapter == 4
+        surface.fill((23, 34, 49))
+        rect(surface, (54, 68, 82), (170, 200, 1370, 820), 14)
+        rect(surface, (73, 91, 104), (200, 220, 1310, 780), 8)
+        rect(surface, (119, 133, 133), (200, 430, 1310, 570))
+        for x in range(220, 1500, 70)
+        {
+            line(surface, (104, 119, 119), (x, 430), (x, 1000), 1)
+        }
+        for y in range(445, 1000, 70)
+        {
+            line(surface, (104, 119, 119), (200, y), (1510, y), 1)
+        }
+        # High windows show the same skyline the player is trying to change.
+        for x in (270, 470, 1110, 1310)
+        {
+            self.window(surface, (x, 255, 120, 150), green)
+        }
+        rect(surface, (40, 56, 74), (660, 235, 380, 165), 16)
+        pygame.draw.circle(surface, (158, 153, 118) if not green else GOLD, (850, 285), 30, 3)
+        for angle in range(0, 360, 45)
+        {
+            dx = math.cos(math.radians(angle))
+            dy = math.sin(math.radians(angle))
+            line(surface, GOLD, (850 + dx * 35, 285 + dy * 35), (850 + dx * 47, 285 + dy * 47), 3)
+        }
+        lettering(surface, self.fonts["heading"], "THE CIVIC ASSEMBLY", (850, 350), CREAM, true)
+        lettering(surface, self.fonts["tiny"], "WHO GETS TO SHAPE TOMORROW?", (850, 381), (151, 180, 177), true)
+        rect(surface, (60, 103, 113), (740, 450, 220, 520), 12)
+        rect(surface, (100, 137, 133), (746, 455, 208, 510), 12, 2)
+        for x in (240, 1460)
+        {
+            for y in (450, 950)
+            {
+                plant(surface, x, y, 1.4, true, (85, 142, 113))
+            }
+        }
+        rect(surface, (58, 74, 85), (792, 970, 116, 28), 3)
+        lettering(surface, self.fonts["tiny"], "EXIT", (850, 979), CREAM, true)
+        for x, y in [(410, 720), (850, 810), (1290, 720)]
+        {
+            rect(surface, (71, 85, 90), (x - 110, y - 20, 220, 60), 12)
+            for dx in (-83, 83)
+            {
+                ellipse(surface, (90, 123, 118), (x + dx - 16, y + 90, 32, 20))
+            }
+        }
+        if green
+        {
+            for x in range(600, 1100, 65)
+            {
+                plant(surface, x, 225, 0.7, false)
+            }
+        }
+    }
+
+    def fixture(self, surface, fixture, story, camera, time)
+    {
+        kind = fixture["kind"]
+        x, y = fixture["pos"]
+        x -= camera.x
+        y -= camera.y
+        if x < -180 or x > W + 180 or y < -180 or y > H + 180
+        {
+            return
+        }
+        if kind in ("prep", "stove", "pantry")
+        {
+            rect(surface, (78, 66, 55), (x - 92, y - 112, 184, 86), 7)
+            rect(surface, (206, 180, 129), (x - 98, y - 120, 196, 45), 7)
+            line(surface, (161, 124, 85), (x - 90, y - 76), (x + 90, y - 76), 3)
+            if kind == "prep"
+            {
+                rect(surface, (145, 112, 71), (x - 53, y - 111, 85, 29), 5)
+                for dx, dy in [(-34, -99), (-9, -96), (12, -98)]
+                {
+                    mushroom(surface, x + dx, y + dy, (188, 131, 86), 0.18)
+                }
+                line(surface, (220, 226, 209), (x + 36, y - 103), (x + 67, y - 100), 5)
+                line(surface, (82, 97, 89), (x + 66, y - 100), (x + 81, y - 98), 5)
+            }
+            elif kind == "stove"
+            {
+                rect(surface, (68, 80, 77), (x - 65, y - 111, 130, 30), 5)
+                for dx in (-35, 35)
+                {
+                    ellipse(surface, (30, 43, 43), (x + dx - 20, y - 108, 40, 20))
+                }
+                if story.cooking
+                {
+                    ellipse(surface, (151, 143, 121), (x - 26, y - 114, 52, 33))
+                    ellipse(surface, RECIPES[story.cooking]["color"], (x - 23, y - 116, 46, 16))
+                    for i in range(3)
+                    {
+                        drift = (time * 18 + i * 14) % 42
+                        ellipse(surface, (218, 211, 184), (x - 14 + i * 11 + math.sin(time + i) * 4, y - 135 - drift, 8, 12))
+                    }
+                    progress = 1 - story.cook_remaining / RECIPES[story.cooking]["time"]
+                    rect(surface, INK, (x - 50, y - 65, 100, 8), 4)
+                    rect(surface, MINT if story.cook_remaining == 0 else GOLD, (x - 50, y - 65, 100 * progress, 8), 4)
+                }
+                for dx in (-45, 0, 45)
+                {
+                    pygame.draw.circle(surface, (170, 178, 151), (int(x + dx), int(y - 48)), 5)
+                }
+            }
+            else
+            {
+                for dx, color in [(-65, (134, 165, 115)), (-20, (191, 128, 86)), (25, (189, 175, 111)), (65, (125, 164, 155))]
+                {
+                    rect(surface, color, (x + dx - 10, y - 111, 22, 30), 4)
+                    rect(surface, CREAM, (x + dx - 9, y - 102, 20, 7), 1)
+                }
+            }
+            lettering(surface, self.fonts["tiny"], fixture["name"].upper(), (x, y - 38), CREAM, true)
+        }
+        elif kind == "board"
+        {
+            rect(surface, (96, 79, 59), (x - 50, y - 127, 100, 91), 6)
+            rect(surface, (69, 110, 118), (x - 43, y - 120, 86, 77), 4)
+            line(surface, (154, 214, 193), (x - 30, y - 92), (x, y - 112), 2)
+            line(surface, (154, 214, 193), (x, y - 112), (x + 30, y - 92), 2)
+            rect(surface, (154, 214, 193), (x - 24, y - 94, 48, 37), 0, 2)
+            for dx in (-35, 35)
+            {
+                line(surface, (86, 76, 58), (x + dx, y - 37), (x + dx + dx * 0.15, y - 6), 5)
+            }
+        }
+        elif kind in ("jun", "mira", "tess", "vale", "sable")
+        {
+            cap = {"jun": (140, 176, 114), "mira": (181, 126, 173), "tess": (133, 174, 191), "vale": (114, 129, 151), "sable": (189, 167, 112)}[kind]
+            mushroom(surface, x, y - 15, cap, 0.95, time, false, -1, kind == "jun", kind == "tess")
+            if kind == "mira"
+            {
+                rect(surface, (99, 100, 124), (x + 16, y - 45, 22, 26), 5)
+            }
+            if kind == "vale"
+            {
+                rect(surface, (190, 201, 186), (x + 24, y - 50, 16, 24), 3)
+            }
+            if kind == "sable"
+            {
+                rect(surface, (92, 103, 103), (x - 60, y - 105, 120, 48), 7)
+                lettering(surface, self.fonts["tiny"], "ASSEMBLY", (x, y - 84), CREAM, true)
+            }
+            lettering(surface, self.fonts["tiny"], fixture["name"].split(" •")[0], (x, y + 3), CREAM, true)
+        }
+        elif kind in ("energy", "food", "transit")
+        {
+            installed = kind in story.reforms
+            rect(surface, (45, 64, 75), (x - 71, y - 117, 142, 74), 8)
+            rect(surface, (92, 151, 133) if installed else (69, 100, 116), (x - 62, y - 108, 124, 52), 4)
+            lettering(surface, self.fonts["small"], kind.upper(), (x, y - 94), MINT if installed else CREAM, true)
+            lettering(surface, self.fonts["tiny"], "ADOPTED" if installed else "PROPOSAL", (x, y - 68), CREAM, true)
+            line(surface, (87, 108, 111), (x, y - 43), (x, y - 20), 9)
+        }
+        elif kind in ("rest", "notebook", "archive")
+        {
+            rect(surface, (99, 78, 58), (x - 53, y - 83, 106, 45), 7)
+            rect(surface, (181, 151, 103), (x - 55, y - 90, 110, 25), 7)
+            rect(surface, (108, 149, 129), (x - 25, y - 86, 50, 21), 3)
+            line(surface, CREAM, (x, y - 83), (x, y - 67), 2)
+        }
+        if kind in ("door", "home", "cityhall", "exit")
+        {
+            pygame.draw.circle(surface, MINT, (int(x), int(y + 6)), 28, 2)
+            for i in (0, 1)
+            {
+                line(surface, MINT, (x - 6, y - 5 + i * 10), (x, y + i * 10), 2)
+                line(surface, MINT, (x, y + i * 10), (x + 6, y - 5 + i * 10), 2)
+            }
+        }
+    }
+}
+
+class Game
+{
+    def __init__(self, headless=false)
+    {
+        pygame.mixer.pre_init(22050, -16, 2, 512)
+        pygame.init()
+        desktop = pygame.display.get_desktop_sizes()[0]
+        initial_size = (min(W, max(960, int(desktop[0] * 0.9))), min(H, max(600, int(desktop[1] * 0.86))))
+        self.window = pygame.display.set_mode(initial_size, pygame.RESIZABLE)
+        pygame.display.set_caption("Mushgame • The Last Little Sun")
+        self.screen = pygame.Surface((W, H))
+        self.fonts = {}
+        for key, size, bold in [("tiny", 15, false), ("small", 19, false), ("body", 23, false), ("heading", 30, true), ("title", 40, true), ("hero", 68, true)]
+        {
+            self.fonts[key] = pygame.font.SysFont("Papyrus", size, bold=bold)
+        }
+        self.audio = Audio()
+        self.art = WorldArt(self.fonts)
+        self.title_backdrop = None
+        self.story = Story()
+        self.clock = pygame.time.Clock()
+        self.camera = pygame.Vector2()
+        self.time = 0
+        self.mode = "title"
+        self.dialogue = None
+        self.selection = 0
+        self.buttons = []
+        self.mouse = (-1, -1)
+        self.running = true
+        self.direction = 1
+        self.moving = false
+        self.transition = 0
+        self.transition_name = ""
+        self.save_timer = 0
+        self.journal_tab = 0
+        self.animation = 0
+        self.headless = headless
+        self.loaded = self.story.load()
+    }
+
+    def talk(self, speaker, body, options, subtitle="")
+    {
+        self.dialogue = {"speaker": speaker, "body": body, "options": options, "subtitle": subtitle}
+        self.selection = 0
+        self.mode = "dialogue"
+        self.audio.play("click")
+    }
+
+    def option(self, label, action, enabled=true)
+    {
+        return {"label": label, "action": action, "enabled": enabled}
+    }
+
+    def close_dialogue(self)
+    {
+        self.dialogue = None
+        self.mode = "play"
+    }
+
+    def travel(self, destination)
+    {
+        old = self.story.location
+        self.story.location = destination
+        entries = {"kitchen": (1270, 800), "district": (500, 800), "hall": (850, 910)}
+        if old == "hall" and destination == "district"
+        {
+            entries["district"] = (1840, 790)
+        }
+        self.story.player = pygame.Vector2(entries[destination])
+        self.close_dialogue()
+        self.transition = 1.8
+        self.transition_name = {"kitchen": "The Little Sun", "district": "Lumen District", "hall": "The Civic Assembly"}[destination]
+        self.story.save()
+    }
+
+    def begin(self, new=false)
+    {
+        if new
+        {
+            self.story = Story()
+            self.loaded = false
+        }
+        self.mode = "play"
+        if not self.story.started
+        {
+            self.story.started = true
+            self.talk("Grandma Luma", "Little Nori,\nIf you're reading this, the kitchen is yours. The city will tell you that bigger is better. I think better is a warm meal, a name remembered, a little sun shared.\nStart small. Keep the door open.", [self.option("I'll keep the kettle warm.", "intro2")], "A letter tucked under the chopping board")
+        }
+        else
+        {
+            self.story.notify("Welcome home. Press J if you need a reminder.")
+        }
+    }
+
+    def act(self, action)
+    {
+        self.buttons = []
+        s = self.story
+        if action == "close"
+        {
+            self.close_dialogue()
+        }
+        elif action == "continue"
+        {
+            self.begin()
+        }
+        elif action == "new"
+        {
+            if self.loaded or s.started
+            {
+                self.talk("Begin a new story?", "Your current story will be replaced when the new one is saved. You can return to the title screen and continue instead.", [self.option("Begin again", "new_confirm"), self.option("Keep my current story", "title")], "THE LAST LITTLE SUN")
+            }
+            else
+            {
+                self.begin(true)
+            }
+        }
+        elif action == "new_confirm"
+        {
+            self.begin(true)
+        }
+        elif action == "title"
+        {
+            self.dialogue = None
+            self.mode = "title"
+            self.selection = 0
+        }
+        elif action == "intro2"
+        {
+            self.talk("Nori", "Three neighbors are waiting for breakfast. I should read their orders, prepare something at the chopping table, then cook it on the stove.\nMaybe this really can be a fresh start.", [self.option("Open the kitchen", "close")], "WASD move • E interact • J journal • Esc pause")
+        }
+        elif action.startswith("prep:")
+        {
+            recipe = action.split(":")[1]
+            s.notify(s.prep(recipe))
+            self.close_dialogue()
+        }
+        elif action.startswith("serve:")
+        {
+            success, message = s.serve(int(action.split(":")[1]))
+            s.notify(message)
+            self.audio.play("serve" if success else "error")
+            self.close_dialogue()
+            if success
+            {
+                s.save()
+            }
+        }
+        elif action.startswith("buy:")
+        {
+            success, message = s.buy(action.split(":")[1])
+            s.notify(message)
+            self.audio.play("upgrade" if success else "error")
+            self.close_dialogue()
+            s.save()
+        }
+        elif action == "seeds"
+        {
+            s.flags["seeds"] = true
+            s.trust += 1
+            self.talk("Jun", "These are grandmother Luma's sunflower seeds. She saved them through three blackouts.\nThere's room on your roof. One day there could be room on every roof.", [self.option("I'll give them a home.", "close")], "A packet of seeds, and a beginning")
+        }
+        elif action == "jun_petition"
+        {
+            s.flags["jun_signature"] = true
+            s.flags["petition"] = bool(s.flags.get("mira_signature"))
+            self.talk("Jun", "I'll write the petition. Not against the city, but for the people who live in it. Sunlight access. Public gardens. A place to gather.\nMira knows the workers on the night shift. Ask her to sign too.", [self.option("Every neighbor deserves daylight.", "close")], "Petition: gardener's signature added")
+        }
+        elif action == "mira_petition"
+        {
+            s.flags["mira_signature"] = true
+            s.flags["petition"] = bool(s.flags.get("jun_signature"))
+            self.talk("Mira", "Signed. The night crews will sign too. We build these towers, but we never get invited into them.\nKeep serving people. A petition with a working kitchen behind it is harder to ignore.", [self.option("Then we'll make it impossible to ignore.", "close")], "Petition: workers' signature added")
+        }
+        elif action in ("permit_coop", "permit_sponsor")
+        {
+            s.flags["permit"] = true
+            sponsored = action == "permit_sponsor"
+            s.flags["sponsor"] = sponsored
+            s.coins += 70 if sponsored else 0
+            s.trust += -1 if sponsored else 2
+            body = "Helix will advance 70 coins. They'll expect their logo on the city's next energy proposal. I hope you know what that means." if sponsored else "A cooperative permit. More paperwork for me, more independence for you. The neighborhood's signatures are enough."
+            self.talk("Inspector Vale", body + "\nCouncillor Sable wants to meet the mushroom who turned a kitchen into a public argument. City Hall is open to you.", [self.option("I'll go to City Hall.", "close")], "New quest: a place at the table")
+            s.save()
+        }
+        elif action == "appointment"
+        {
+            s.flags["appointment"] = true
+            self.talk("Councillor Sable", "Welcome to the government, Civic Steward Nori. Your first brief has three committees: energy, food, and transit.\nEach needs a working example and someone from the neighborhood who can explain it. Bring us both. Convince us this future can exist outside a drawing.", [self.option("Let's build something people can use.", "close")], "Appointment accepted • Council committees unlocked")
+            s.save()
+        }
+        elif action == "energy_plan"
+        {
+            s.flags["energy_plan"] = true
+            self.talk("Tess", "I've drawn a modular grid around your solar stove. Add a community battery and we can prove it survives the night.\nThe committee will ask who owns the wires. Think about your answer.", [self.option("Thank you, Tess.", "close")], "Energy plan acquired • Install Solar stove + Community battery")
+        }
+        elif action == "food_plan"
+        {
+            s.flags["food_plan"] = true
+            self.talk("Jun", "I counted your meals. They aren't charity; they're infrastructure.\nTwelve customers and a living roof will prove we can feed people without putting another truck on the road. Let the gardeners speak at the food committee.", [self.option("A garden is a public service.", "close")], "Food plan acquired • Serve 12 customers + Install Living roof")
+        }
+        elif action in ("route_public", "route_control")
+        {
+            s.flags["transit_plan"] = true
+            s.flags["transit_public"] = action == "route_public"
+            s.trust += 1 if action == "route_public" else -1
+            self.talk("Mira", "A public night tram, open to everyone. I can get the crews to maintain it. People should reach home without being treated as suspects." if action == "route_public" else "A faster route with ID gates. Helix likes it. Some workers won't be able to use it. I'll take the map to the committee, but please think about who gets left out.", [self.option("Take the route map to the council.", "close")], "Transit plan acquired • Your route choice shapes the charter")
+        }
+        elif action in ("energy_public", "energy_corporate", "food_commons", "food_contract", "transit_open", "transit_gated")
+        {
+            reform = action.split("_")[0]
+            if reform not in s.reforms
+            {
+                s.reforms.append(reform)
+                s.flags[action] = true
+                good = action in ("energy_public", "food_commons", "transit_open")
+                s.trust += 2 if good else 0
+                s.coins += 0 if good else 35
+                self.audio.play("chapter")
+            }
+            explanations = {
+                "energy_public": "The motion passes. Rooftop solar and shared storage belong to the neighborhoods that maintain them. Tess looks up at the chamber lights. For once, they don't flicker.",
+                "energy_corporate": "The motion passes. Helix will install clean power quickly, with long contracts and private meters. The air will improve. The question of ownership remains.",
+                "food_commons": "The motion passes. Vacant roofs become public gardens; community kitchens receive seed grants. Jun's hands shake as they unfold Luma's old seed packet.",
+                "food_contract": "The motion passes. A central supplier will operate new rooftop farms. There will be food, but neighborhood kitchens must compete for a license.",
+                "transit_open": "The motion passes. Quiet electric trams will run all night without ID gates. Mira can finally stop buying two fares just to get home.",
+                "transit_gated": "The motion passes. Electric trams replace the diesel fleets, but the gates will track every rider. Mira folds the map carefully and says nothing."
+            }
+            self.talk("The Assembly", explanations[action] + "\nOutside, the first crews begin work. The city has changed because you spoke.", [self.option("There's more to do.", "close")], reform.upper() + " REFORM ADOPTED • " + str(len(s.reforms)) + "/3")
+            s.save()
+        }
+        elif action in ("charter_commons", "charter_renew")
+        {
+            s.chapter = 4
+            s.flags["ending"] = "commons" if action == "charter_commons" else "renew"
+            if action == "charter_commons"
+            {
+                s.flags["transit_public"] = true
+                s.flags["energy_public"] = true
+                s.flags["food_commons"] = true
+                s.flags["transit_open"] = true
+                s.flags["transit_gated"] = false
+                s.flags["energy_corporate"] = false
+                s.flags["food_contract"] = false
+                s.trust += 3
+            }
+            self.audio.play("chapter")
+            closing = "The towers are still tall, but they no longer decide who gets to see the sky." if action == "charter_commons" else "The towers are still tall. Some contracts still cast shadows. But now we know this city can change, and the work can continue."
+            self.talk("Nori", "We didn't tear down the city. We taught it how to grow.\nThere are vines on the bridges. Sunlight in the wires. Kitchens with doors that stay open. " + closing + "\nGrandma, I kept the kettle warm.", [self.option("Walk home through the new city.", "ending")], "CHAPTER FIVE • THE LAST LITTLE SUN")
+            s.save()
+        }
+        elif action == "ending"
+        {
+            self.travel("district")
+            self.story.notify("Story complete. Your kitchen and neighborhood remain open to explore.")
+        }
+        elif action == "visit_district"
+        {
+            self.travel("district")
+        }
+        elif action == "clinic"
+        {
+            if s.carry == "broth" and not s.flags.get("clinic")
+            {
+                s.carry = None
+                s.flags["clinic"] = true
+                s.coins += 30
+                s.trust += 2
+                self.audio.play("serve")
+                self.talk("Mira", "The clinic night crew asked me to thank you. They collected 30 coins for the kitchen. More than the broth costs, I know. They said kindness should be sustainable too.\nThis is what a city can be: people carrying a little warmth to one another.", [self.option("Tell them the kitchen is always open.", "close")], "NEIGHBOR FAVOR COMPLETE • +30 COINS • +2 TRUST")
+            }
+        }
+        elif action == "donate"
+        {
+            if s.carry
+            {
+                s.carry = None
+                s.flags["donations"] = s.flags.get("donations", 0) + 1
+                s.notify("A spare meal waits on the community shelf. Nobody goes hungry.")
+            }
+            elif s.prepared
+            {
+                s.prepared = None
+                s.notify("Ingredients returned to the pantry. Choose another recipe.")
+            }
+            self.close_dialogue()
+        }
+        elif action == "rest"
+        {
+            s.day += 1
+            s.refill_customers()
+            s.notify("Day " + str(s.day) + ". New faces, same warm kettle.")
+            self.close_dialogue()
+            s.save()
+        }
+        elif action == "save"
+        {
+            if s.save()
+            {
+                s.notify("Story saved.")
+            }
+            self.mode = "play"
+        }
+        elif action == "quit"
+        {
+            if s.started
+            {
+                s.save()
+            }
+            self.running = false
+        }
+        elif action == "journal"
+        {
+            self.mode = "journal"
+            self.journal_tab = 0
+        }
+        elif action.startswith("tab:")
+        {
+            self.journal_tab = int(action.split(":")[1])
+        }
+        elif action == "mute"
+        {
+            self.audio.toggle()
+        }
+    }
+
+    def interact(self)
+    {
+        s = self.story
+        target = self.nearest()
+        if not target
+        {
+            s.notify("Walk closer to a person, workbench, or doorway, then press E.")
+            return
+        }
+        key = target["key"]
+        if key.startswith("customer:")
+        {
+            c = next(c for c in s.customers if c["id"] == int(key.split(":")[1]))
+            options = []
+            if s.carry == c["order"]
+            {
+                options.append(self.option("Serve " + RECIPES[s.carry]["name"], "serve:" + str(c["id"])))
+            }
+            options.append(self.option("I'll be right back with your order.", "close"))
+            customer_line = AFTER_LINES[c["id"] % len(AFTER_LINES)] if s.chapter == 4 else c["line"]
+            self.talk(c["name"], customer_line + "\nCould I have " + RECIPES[c["order"]]["name"].lower() + ", please?", options, "CUSTOMER ORDER • " + RECIPES[c["order"]]["name"])
+        }
+        elif key == "prep"
+        {
+            if s.carry or s.prepared
+            {
+                s.notify("Your hands are full. Take ingredients to the stove, or a meal to a customer.")
+                return
+            }
+            options = [self.option(RECIPES[r]["name"] + " • " + str(RECIPES[r]["price"]) + " coins", "prep:" + r) for r in s.known_recipes()]
+            options.append(self.option("Not yet", "close"))
+            self.talk("Chopping table", "Your pantry is stocked by the neighborhood growers. Ingredients are free; nothing can stop you from cooking your way back.\nChoose a recipe to prepare, then take it to the stove.", options, "PREPARE A MEAL")
+        }
+        elif key == "stove"
+        {
+            ready = s.cooking and s.cook_remaining <= 0 and not s.carry
+            s.notify(s.use_stove())
+            self.audio.play("serve" if ready else "click")
+        }
+        elif key == "pantry"
+        {
+            body = ""
+            for recipe in s.known_recipes()
+            {
+                info = RECIPES[recipe]
+                body += info["name"] + " — " + info["description"] + "\n"
+            }
+            options = [self.option("Back to the kitchen", "close")]
+            if s.carry or s.prepared
+            {
+                options.insert(0, self.option("Share a spare meal / return ingredients", "donate"))
+            }
+            self.talk("The recipe shelf", body + "\nOrders never expire. The community shelf accepts spare dishes if you made something nobody ordered.", options, "LUMA'S RECIPE COLLECTION")
+        }
+        elif key == "upgrades"
+        {
+            options = []
+            for upgrade, info in UPGRADES.items()
+            {
+                installed = upgrade in s.upgrades
+                label = info["name"] + (" • installed" if installed else " • " + str(info["cost"]) + " coins")
+                options.append(self.option(label, "buy:" + upgrade, not installed and s.coins >= info["cost"]))
+            }
+            options.append(self.option("Keep cooking", "close"))
+            self.talk("A roof full of possibilities", "Solar stove: cook 30% faster.\nLiving roof: unlock Rooftop bowl.\nRainwater loop: unlock tea; +4 coins per meal.\nCommunity battery: cook another 20% faster; share energy after dark.", options, "SHOP BLUEPRINTS • YOUR COINS: " + str(s.coins))
+        }
+        elif key in ("door", "home", "exit")
+        {
+            self.travel("district" if key in ("door", "exit") else "kitchen")
+        }
+        elif key == "cityhall"
+        {
+            if s.chapter < 2 or not s.flags.get("permit")
+            {
+                self.talk("The City Hall attendant", "The assembly is in closed session. Inspector Vale handles invitations.\nPeople say the council listens only to numbers. Perhaps you can bring them something more.", [self.option("Return to the neighborhood", "close")], "CITY HALL")
+            }
+            else
+            {
+                self.travel("hall")
+            }
+        }
+        elif key == "rest"
+        {
+            self.talk("An evening at the Little Sun", "The last tram hums past the window. You can close the shutters, save your story, and greet tomorrow. Your dishes and upgrades will stay with you.", [self.option("Rest and save", "rest"), self.option("Stay open a little longer", "close")], "DAY " + str(s.day))
+        }
+        elif key == "luma"
+        {
+            self.talk("Grandma Luma's notebook", "A city is a recipe. It matters who gets to choose the ingredients.\nIf you ever find yourself in a room where decisions are made, don't let them call kindness impractical. Tell them it kept this kitchen open for forty years.", [self.option("Carry these words with me.", "close")], "A NOTE IN THE MARGIN")
+        }
+        elif key == "jun"
+        {
+            self.jun_dialogue()
+        }
+        elif key == "mira"
+        {
+            self.mira_dialogue()
+        }
+        elif key == "tess"
+        {
+            self.tess_dialogue()
+        }
+        elif key == "vale"
+        {
+            self.vale_dialogue()
+        }
+        elif key == "sable"
+        {
+            self.sable_dialogue()
+        }
+        elif key in ("energy", "food", "transit")
+        {
+            self.committee(key)
+        }
+        elif key == "archive"
+        {
+            self.talk("City archive • entry 2081", "Before the towers, Lumen was a ring of greenhouses around a railway. Growth brought work, then smog, then darkness.\nThe original charter promised every resident access to sunlight. That paragraph was never repealed. It was simply forgotten.", [self.option("Then we can remember it.", "close")], "PUBLIC RECORDS")
+        }
+        elif key == "memorial"
+        {
+            message = "New leaves are growing where the old garden stood. Someone has placed a sign: For Luma, and everyone who kept planting." if s.chapter == 4 else "A small patch of soil survives beside the canal. A plaque reads: Sun Garden, planted by the kitchen workers of Lumen.\nThe towers cast a long shadow. Underneath it, one seedling keeps reaching upward."
+            self.talk("The old sun garden", message, [self.option("There is still something to save.", "close")], "LUMEN'S ROOTS")
+        }
+    }
+
+    def jun_dialogue(self)
+    {
+        s = self.story
+        if s.chapter == 4
+        {
+            self.talk("Jun", "Look at it, Nori. Rooftops full of things that grow. We don't have to call a little garden an act of resistance anymore.\nI wish Luma could see this. I think she would ask whether everyone has eaten yet.", [self.option("Then we should get cooking.", "close")], "AFTER THE CHARTER")
+        }
+        elif s.chapter >= 3 and not s.flags.get("food_plan")
+        {
+            self.talk("Jun", "A council badge! Luma would have laughed until she cried.\nNow let's use it. A city needs a food plan that begins with people, not warehouses.", [self.option("Help me design public rooftop gardens.", "food_plan"), self.option("I'll come back.", "close")], "FOOD REFORM • A WORKING EXAMPLE")
+        }
+        elif s.chapter >= 1 and not s.flags.get("jun_signature")
+        {
+            self.talk("Jun", "The construction crews fenced off the sun garden this morning. They said it's progress. Progress for whom?\nWe could petition the council. Your kitchen is proof that something gentler can work.", [self.option("Let's write a petition for the neighborhood.", "jun_petition"), self.option("First, I need to get my bearings.", "close")], "THE TOWERS RISE")
+        }
+        elif not s.flags.get("seeds")
+        {
+            self.talk("Jun", "You're Luma's grandchild. Same bright cap. Same worried little face.\nI kept something for you: the sunflower seeds she asked me to save.", [self.option("I'd like to plant them.", "seeds"), self.option("I'll be back for them.", "close")], "YOUR NEIGHBOR • GARDENER")
+        }
+        else
+        {
+            self.talk("Jun", "A living roof is more than decoration. It cools the building, feeds the kitchen, and gives a tired person somewhere to look besides concrete.\nWhen you've served twelve meals, take that story to the food committee.", [self.option("Thank you, Jun.", "close")], "THE GARDENER'S ADVICE")
+        }
+    }
+
+    def mira_dialogue(self)
+    {
+        s = self.story
+        if s.carry == "broth" and not s.flags.get("clinic")
+        {
+            self.talk("Mira", "Is that forest broth? The clinic's night crew hasn't had a proper meal today.\nIf you can spare it, I'll deliver it. They promised to pay the kitchen back when they can.", [self.option("Send the broth to the clinic.", "clinic"), self.option("I need this for a customer's order.", "close")], "OPTIONAL NEIGHBOR FAVOR • A MEAL FOR THE NIGHT CREW")
+        }
+        elif s.chapter == 4
+        {
+            text = "The first night tram left yesterday. No diesel. No ID gates. I got home while the tea was still warm." if s.flags.get("transit_public") or s.flags.get("transit_open") else "The trams are cleaner now. The gates still trouble me. At least we know change is possible; we can keep asking for more."
+            self.talk("Mira", text + "\nThanks for listening when I was just another courier with a complaint.", [self.option("You were always part of the city.", "close")], "AFTER THE CHARTER")
+        }
+        elif s.chapter >= 3 and not s.flags.get("transit_plan")
+        {
+            self.talk("Mira", "The committee asked for a route map. I have two. One links the night crews to clinics and kitchens. Open fares, no gates.\nThe other gets corporate funding faster, but requires an ID scan at every stop. Which city are we building?", [self.option("Open night trams. Nobody gets left outside.", "route_public"), self.option("Use ID gates to attract corporate funding.", "route_control"), self.option("I need to think.", "close")], "TRANSIT REFORM • A REAL CHOICE")
+        }
+        elif s.chapter >= 1 and not s.flags.get("mira_signature")
+        {
+            self.talk("Mira", "I deliver meals to people on the forty-ninth floor, then walk home through a street without lights.\nJun mentioned a petition. If it asks for a city that works after the offices close, I'll sign.", [self.option("Sign the neighborhood petition.", "mira_petition"), self.option("I'll come back.", "close")], "YOUR NEIGHBOR • COURIER")
+        }
+        else
+        {
+            self.talk("Mira", "Every tower gets a private lift. Every worker gets a longer walk.\nSomeday I'd like a tram that runs when we need it, not just when the executives do.", [self.option("I'll remember that.", "close")], "THE LAST DELIVERY OF THE NIGHT")
+        }
+    }
+
+    def tess_dialogue(self)
+    {
+        s = self.story
+        if s.chapter == 4
+        {
+            text = "The neighborhood owns its wires now. I used to repair meters that only counted debt. This feels different." if s.flags.get("energy_public") else "The solar grid is running. Clean power is a start. We still have to make sure the bills don't swallow everyone's savings."
+            self.talk("Tess", text + "\nIt began with your stove. A very small machine. A very big idea.", [self.option("Let's keep building.", "close")], "AFTER THE CHARTER")
+        }
+        elif s.chapter >= 3 and not s.flags.get("energy_plan")
+        {
+            if "solar" in s.upgrades
+            {
+                self.talk("Tess", "Your solar stove stayed on through yesterday's outage. The council called that a statistical anomaly. I called it a prototype.\nI can turn it into an energy plan. We'll need a community battery to prove it scales.", [self.option("Draw up the shared solar grid.", "energy_plan"), self.option("Not yet.", "close")], "ENERGY REFORM • PROTOTYPE")
+            }
+            else
+            {
+                self.talk("Tess", "Install a solar stove at your shop first. I need a working collector before I can draw up a citywide plan.\nThe blueprint board in your kitchen has one for 45 coins.", [self.option("I'll build it.", "close")], "ENERGY REFORM • NEEDS SOLAR STOVE")
+            }
+        }
+        else
+        {
+            self.talk("Tess", "I'm a grid engineer. Most days that means deciding which neighborhood loses power first.\nSolar collectors, rainwater loops, shared batteries... I'd rather design a system that doesn't need someone to lose.", [self.option("My roof could be a beginning.", "close")], "YOUR NEIGHBOR • ENGINEER")
+        }
+    }
+
+    def vale_dialogue(self)
+    {
+        s = self.story
+        if s.chapter < 2
+        {
+            self.talk("Inspector Vale", "A kitchen permit is not a city policy, little mushroom.\nBut I've heard people talking. Feed six customers. Install two improvements. Bring me the neighborhood's petition. Then we'll have something worth discussing.", [self.option("I'll bring you a working example.", "close")], "THE COUNCIL IS WATCHING")
+        }
+        elif not s.flags.get("permit")
+        {
+            self.talk("Inspector Vale", "Six meals. A rooftop prototype. Two neighbors willing to sign their names. This is more than a hobby.\nI can issue a cooperative permit, backed by the neighborhood. Or Helix can sponsor you: 70 coins now, with their expectations attached.", [self.option("A cooperative permit. Let the neighbors own this.", "permit_coop"), self.option("Take Helix's 70-coin sponsorship.", "permit_sponsor"), self.option("Give me a moment.", "close")], "PERMIT DECISION • INDEPENDENCE OR A QUICKER START")
+        }
+        else
+        {
+            self.talk("Inspector Vale", "Sable is waiting in City Hall. Don't let the high ceilings make you feel small.\nI have worked here thirty years. Small things have changed this city before.", [self.option("I'll remember that.", "close")], "YOUR INVITATION IS READY")
+        }
+    }
+
+    def sable_dialogue(self)
+    {
+        s = self.story
+        if s.chapter == 4
+        {
+            self.talk("Councillor Sable", "The charter is signed. The work is not finished; a city never is. But its direction has changed.\nKeep the kitchen open, Steward. Governments need places where the truth can still be said over soup.", [self.option("The kettle will be warm.", "close")], "AFTER THE CHARTER")
+        }
+        elif not s.flags.get("appointment")
+        {
+            self.talk("Councillor Sable", "The council has architects, financiers, and security officers. It has very few people who know what a neighbor needs for breakfast.\nJoin us as a Civic Steward. Not a mascot. A member of the government, with a voice and three proposals to bring.", [self.option("I accept. The neighborhood comes with me.", "appointment"), self.option("I need a little more time.", "close")], "A PLACE AT THE TABLE")
+        }
+        elif len(s.reforms) < 3
+        {
+            self.talk("Councillor Sable", "Energy. Food. Transit. Three systems that decide whether a city is livable.\nTalk to Tess, Jun, and Mira. Demonstrate the technology at your kitchen. Then present your plans to the committees around this chamber.", [self.option("I'll bring the neighborhood's plans.", "close"), self.option("Open my journal", "journal")], "CIVIC STEWARD • " + str(len(s.reforms)) + "/3 REFORMS")
+        }
+        else
+        {
+            choices = [self.option("A Commons Charter: public ownership and open access.", "charter_commons"), self.option("A Renewal Charter: preserve the agreements I made.", "charter_renew"), self.option("Let me walk through the city once more.", "close")]
+            self.talk("Councillor Sable", "All three proposals passed. Now we can join them into a city charter.\nA Commons Charter will replace private meters, supplier restrictions, and ID gates with public stewardship. A Renewal Charter keeps your committee agreements intact. Both restore green roofs and clean transit. Who should this future belong to?", choices, "THE FINAL DECISION")
+        }
+    }
+
+    def committee(self, kind)
+    {
+        s = self.story
+        if kind in s.reforms
+        {
+            self.talk(kind.capitalize() + " committee", "This proposal has been adopted. Crews are already working in Lumen.\nThe next step is to join all three reforms into a new charter.", [self.option("Return to the chamber", "close")], "REFORM ADOPTED")
+            return
+        }
+        if not s.flags.get("appointment")
+        {
+            self.talk("Assembly clerk", "Only appointed Civic Stewards can present a proposal. Please speak with Councillor Sable.", [self.option("I'll speak with Sable.", "close")], "COUNCIL PROCEDURE")
+            return
+        }
+        requirements = self.requirements(kind)
+        if not all(done for name, done in requirements)
+        {
+            body = "A proposal needs evidence. Your journal tracks each requirement.\n"
+            for label, done in requirements
+            {
+                body += ("Complete: " if done else "Needed: ") + label + "\n"
+            }
+            self.talk(kind.capitalize() + " committee", body, [self.option("I'll return with the evidence.", "close"), self.option("Open my journal", "journal")], "PROPOSAL REQUIREMENTS")
+            return
+        }
+        if kind == "energy"
+        {
+            self.talk("Energy committee", "Your solar stove and shared battery prove the design. Tess's numbers show it can power the district.\nHelix offers a fast rollout if it owns the meters. The neighborhood proposes a cooperative grid. Who should own the light?", [self.option("Public grid. Neighbors own the wires they maintain.", "energy_public"), self.option("Helix grid. Take the rollout grant (+35 coins).", "energy_corporate"), self.option("I need to think.", "close")], "ENERGY DEBATE")
+        }
+        elif kind == "food"
+        {
+            self.talk("Food committee", "Twelve meals, a productive roof, and Jun's planting plan. We agree food belongs in this proposal.\nShould we fund public gardens and kitchens, or award a central supplier the contract?", [self.option("Public gardens. Small kitchens receive seed grants.", "food_commons"), self.option("Central supplier. Accept its grant (+35 coins).", "food_contract"), self.option("I need to think.", "close")], "FOOD DEBATE")
+        }
+        else
+        {
+            self.talk("Transit committee", "Mira mapped the routes the night crews actually use. Electric trams can replace the diesel fleet.\nThe security office asks for ID gates. Mira asks for a city where getting home isn't a privilege. You have the deciding voice.", [self.option("Open trams. No ID gates. Keep the night crews moving.", "transit_open"), self.option("Gated trams. Take the security grant (+35 coins).", "transit_gated"), self.option("I need to think.", "close")], "TRANSIT DEBATE")
+        }
+    }
+
+    def requirements(self, kind)
+    {
+        s = self.story
+        return {
+            "energy": [("Tess's energy plan", bool(s.flags.get("energy_plan"))), ("Solar stove installed", "solar" in s.upgrades), ("Community battery installed", "battery" in s.upgrades)],
+            "food": [("Jun's food plan", bool(s.flags.get("food_plan"))), ("Living roof installed", "garden" in s.upgrades), ("12 customers served (" + str(s.served) + "/12)", s.served >= 12)],
+            "transit": [("Mira's route map", bool(s.flags.get("transit_plan"))), ("Neighborhood petition completed", bool(s.flags.get("petition")))]
+        }[kind]
+    }
+
+    def targets(self)
+    {
+        result = fixtures(self.story.location)[:]
+        if self.story.location == "kitchen"
+        {
+            for index, c in enumerate(self.story.customers)
+            {
+                result.append({"key": "customer:" + str(c["id"]), "name": c["name"] + " • " + RECIPES[c["order"]]["name"], "pos": (430 + c.get("seat", index) * 290, 730), "kind": "customer", "customer": c})
+            }
+        }
+        return result
+    }
+
+    def nearest(self)
+    {
+        distances = [(self.story.player.distance_to(target["pos"]), target) for target in self.targets()]
+        if not distances
+        {
+            return None
+        }
+        distance, target = min(distances, key=lambda item: item[0])
+        return target if distance < 112 else None
+    }
+
+    def waypoint(self)
+    {
+        s = self.story
+        if s.carry
+        {
+            customer = next((c for c in s.customers if c["order"] == s.carry), None)
+            if customer
+            {
+                goal = ("kitchen", "customer:" + str(customer["id"]), "Serve " + customer["name"])
+            }
+            else
+            {
+                goal = ("kitchen", "pantry", "Share your spare dish")
+            }
+        }
+        elif s.prepared
+        {
+            goal = ("kitchen", "stove", "Cook your ingredients")
+        }
+        elif s.cooking and s.cook_remaining <= 0
+        {
+            goal = ("kitchen", "stove", "Collect your finished meal")
+        }
+        elif s.chapter == 0
+        {
+            goal = ("kitchen", "prep", "Prepare an order") if s.served < 3 else ("kitchen", "upgrades", "Install your first upgrade")
+        }
+        elif s.chapter == 1
+        {
+            if not s.flags.get("jun_signature")
+            {
+                goal = ("district", "jun", "Talk to Jun")
+            }
+            elif not s.flags.get("mira_signature")
+            {
+                goal = ("district", "mira", "Talk to Mira")
+            }
+            elif s.served < 6
+            {
+                goal = ("kitchen", "prep", "Serve the neighborhood")
+            }
+            else
+            {
+                affordable = any(key not in s.upgrades and s.coins >= info["cost"] for key, info in UPGRADES.items())
+                goal = ("kitchen", "upgrades", "Build your second upgrade") if affordable else ("kitchen", "prep", "Earn coins for an upgrade")
+            }
+        }
+        elif s.chapter == 2
+        {
+            goal = ("hall", "sable", "Meet Councillor Sable") if s.flags.get("permit") else ("district", "vale", "Get your kitchen permit")
+        }
+        elif s.chapter == 3
+        {
+            if "energy" not in s.reforms
+            {
+                missing = "solar" if "solar" not in s.upgrades else "battery" if "battery" not in s.upgrades else None
+                if missing
+                {
+                    goal = ("kitchen", "upgrades", "Build " + UPGRADES[missing]["name"]) if s.coins >= UPGRADES[missing]["cost"] else ("kitchen", "prep", "Cook to fund clean energy")
+                }
+                elif not s.flags.get("energy_plan")
+                {
+                    goal = ("district", "tess", "Ask Tess for an energy plan")
+                }
+                else
+                {
+                    goal = ("hall", "energy", "Present your energy proposal")
+                }
+            }
+            elif "food" not in s.reforms
+            {
+                if "garden" not in s.upgrades
+                {
+                    goal = ("kitchen", "upgrades", "Plant a living roof") if s.coins >= 65 else ("kitchen", "prep", "Cook to fund your garden")
+                }
+                elif s.served < 12
+                {
+                    goal = ("kitchen", "prep", "Serve 12 neighbors")
+                }
+                elif not s.flags.get("food_plan")
+                {
+                    goal = ("district", "jun", "Ask Jun for a food plan")
+                }
+                else
+                {
+                    goal = ("hall", "food", "Present your food proposal")
+                }
+            }
+            elif "transit" not in s.reforms
+            {
+                goal = ("hall", "transit", "Present your transit proposal") if s.flags.get("transit_plan") else ("district", "mira", "Plan the night tram with Mira")
+            }
+            else
+            {
+                goal = ("hall", "sable", "Write the new city charter")
+            }
+        }
+        else
+        {
+            goal = ("district", "memorial", "Visit the sun garden")
+        }
+        destination, key, label = goal
+        if destination != s.location
+        {
+            routes = {"kitchen": "door", "hall": "exit", "district": "home" if destination == "kitchen" else "cityhall"}
+            key = routes[s.location]
+        }
+        target = next((t for t in self.targets() if t["key"] == key), None)
+        return target, label
+    }
+
+    def draw_waypoint(self)
+    {
+        target, label = self.waypoint()
+        if target is None
+        {
+            return
+        }
+        point = pygame.Vector2(target["pos"]) - self.camera
+        if 40 < point.x < W - 40 and 155 < point.y < H - 165
+        {
+            if self.story.player.distance_to(target["pos"]) > 112
+            {
+                pygame.draw.circle(self.screen, GOLD, (int(point.x), int(point.y + 13)), 27, 2)
+                arrow_y = point.y - 114 + math.sin(self.time * 3) * 5
+                pygame.draw.polygon(self.screen, GOLD, [(point.x - 7, arrow_y), (point.x + 7, arrow_y), (point.x, arrow_y + 9)])
+            }
+        }
+        vector = pygame.Vector2(target["pos"]) - self.story.player
+        angle = math.atan2(vector.y, vector.x)
+        x, y = 1214, H - 49
+        if vector.length() > 112
+        {
+            local = [(13, 0), (-8, -8), (-3, 0), (-8, 8)]
+            points = [(x + px * math.cos(angle) - py * math.sin(angle), y + px * math.sin(angle) + py * math.cos(angle)) for px, py in local]
+            pygame.draw.polygon(self.screen, GOLD, points)
+        }
+        else
+        {
+            rect(self.screen, (63, 95, 77), (x - 15, y - 17, 30, 32), 7)
+            lettering(self.screen, self.fonts["small"], "E", (x, y), GOLD, true)
+        }
+        lettering(self.screen, self.fonts["tiny"], "NEXT", (859, H - 65), MINT)
+        lettering(self.screen, self.fonts["small"], label, (859, H - 44), GOLD)
+    }
+
+    def handle_event(self, event)
+    {
+        if event.type == pygame.QUIT
+        {
+            self.act("quit")
+            return
+        }
+        if event.type == pygame.WINDOWFOCUSLOST and self.mode == "play"
+        {
+            self.mode = "pause"
+        }
+        if event.type == pygame.MOUSEMOTION
+        {
+            self.mouse = self.logical_mouse(event.pos)
+        }
+        if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1
+        {
+            position = self.logical_mouse(event.pos)
+            for box, action, enabled in self.buttons
+            {
+                if box.collidepoint(position) and enabled
+                {
+                    self.act(action)
+                    return
+                }
+            }
+        }
+        if event.type != pygame.KEYDOWN
+        {
+            return
+        }
+        if event.key == pygame.K_m
+        {
+            self.audio.toggle()
+            return
+        }
+        if event.key == pygame.K_ESCAPE
+        {
+            if self.mode == "play"
+            {
+                self.mode = "pause"
+                self.selection = 0
+            }
+            elif self.mode == "pause"
+            {
+                self.mode = "play"
+            }
+            elif self.mode in ("journal", "dialogue")
+            {
+                self.close_dialogue()
+            }
+            return
+        }
+        if self.mode == "play"
+        {
+            if event.key in (pygame.K_e, pygame.K_RETURN)
+            {
+                self.interact()
+            }
+            elif event.key in (pygame.K_j, pygame.K_TAB)
+            {
+                self.mode = "journal"
+                self.journal_tab = 0
+            }
+            elif event.key == pygame.K_F5
+            {
+                self.act("save")
+            }
+        }
+        elif self.mode in ("dialogue", "title", "pause")
+        {
+            options = self.menu_options()
+            if event.key in (pygame.K_UP, pygame.K_w)
+            {
+                self.selection = (self.selection - 1) % len(options)
+                self.audio.play("click")
+            }
+            elif event.key in (pygame.K_DOWN, pygame.K_s)
+            {
+                self.selection = (self.selection + 1) % len(options)
+                self.audio.play("click")
+            }
+            elif event.key in (pygame.K_RETURN, pygame.K_SPACE)
+            {
+                option = options[self.selection % len(options)]
+                if option["enabled"]
+                {
+                    self.act(option["action"])
+                }
+                else
+                {
+                    self.audio.play("error")
+                }
+            }
+            elif pygame.K_1 <= event.key <= pygame.K_9
+            {
+                index = event.key - pygame.K_1
+                if index < len(options) and options[index]["enabled"]
+                {
+                    self.act(options[index]["action"])
+                }
+            }
+        }
+        elif self.mode == "journal"
+        {
+            if event.key in (pygame.K_j, pygame.K_TAB)
+            {
+                self.mode = "play"
+            }
+            elif event.key in (pygame.K_LEFT, pygame.K_a)
+            {
+                self.journal_tab = (self.journal_tab - 1) % 3
+            }
+            elif event.key in (pygame.K_RIGHT, pygame.K_d)
+            {
+                self.journal_tab = (self.journal_tab + 1) % 3
+            }
+            elif pygame.K_1 <= event.key <= pygame.K_3
+            {
+                self.journal_tab = event.key - pygame.K_1
+            }
+        }
+    }
+
+    def logical_mouse(self, position)
+    {
+        ww, wh = self.window.get_size()
+        scale = min(ww / W, wh / H)
+        left, top = (ww - W * scale) / 2, (wh - H * scale) / 2
+        return ((position[0] - left) / scale, (position[1] - top) / scale)
+    }
+
+    def menu_options(self)
+    {
+        if self.mode == "dialogue"
+        {
+            return self.dialogue["options"]
+        }
+        if self.mode == "title"
+        {
+            result = []
+            if self.loaded or self.story.started
+            {
+                result.append(self.option("Continue your story", "continue"))
+            }
+            result.append(self.option("Begin a new story", "new"))
+            result.append(self.option("Leave the city", "quit"))
+            return result
+        }
+        return [self.option("Return to the kitchen", "close"), self.option("Save your story", "save"), self.option("Journal & map", "journal"), self.option("Sound: " + ("on" if self.audio.enabled else "off"), "mute"), self.option("Save & quit", "quit")]
+    }
+
+    def update(self, dt)
+    {
+        self.time += dt
+        self.transition = max(0, self.transition - dt)
+        self.moving = false
+        if self.mode == "play"
+        {
+            keys = pygame.key.get_pressed()
+            delta = pygame.Vector2(int(keys[pygame.K_d] or keys[pygame.K_RIGHT]) - int(keys[pygame.K_a] or keys[pygame.K_LEFT]), int(keys[pygame.K_s] or keys[pygame.K_DOWN]) - int(keys[pygame.K_w] or keys[pygame.K_UP]))
+            self.moving = delta.length_squared() > 0
+            if self.moving
+            {
+                self.direction = 1 if delta.x >= 0 else -1
+                move_player(self.story, delta.normalize() * dt * (310 if keys[pygame.K_LSHIFT] or keys[pygame.K_RSHIFT] else 225))
+            }
+            if self.story.update(dt)
+            {
+                self.audio.play("chapter")
+                self.transition = 3.5
+                self.transition_name = "Chapter " + str(self.story.chapter + 1) + " • " + CHAPTERS[self.story.chapter]
+                self.story.save()
+                if self.story.chapter == 1
+                {
+                    self.talk("When the towers rise", "At sunset, cranes draw new lines across the sky. By morning, a tower stands where the sun used to enter your kitchen.\nYour roof has begun to grow. The city has begun to close around it. Outside, your neighbors are waiting to see which kind of growth will win.", [self.option("Step outside and listen to the neighbors.", "visit_district"), self.option("Finish what I'm cooking first.", "close")], "CHAPTER TWO")
+                }
+                elif self.story.chapter == 2
+                {
+                    self.talk("A place at the table", "Your petition reaches the council with a photo of the shop's roof and a list of everyone you've fed.\nAn inspector leaves a note on your door: Meet me in the square. We should talk about your future in this city.", [self.option("Meet Inspector Vale.", "visit_district"), self.option("Keep the kitchen open a little longer.", "close")], "CHAPTER THREE")
+                }
+            }
+            self.save_timer += dt
+            if self.save_timer >= 45
+            {
+                self.story.save()
+                self.save_timer = 0
+            }
+        }
+        size = scene_size(self.story.location)
+        self.camera.x = max(0, min(size[0] - W, self.story.player.x - W * 0.5))
+        self.camera.y = max(0, min(size[1] - H, self.story.player.y - H * 0.59))
+    }
+
+    def button(self, box, label, action, selected=false, enabled=true, number=None)
+    {
+        hovered = pygame.Rect(box).collidepoint(self.mouse)
+        selected = (selected or hovered) and enabled
+        color = (74, 108, 89) if selected else (39, 57, 57)
+        if not enabled
+        {
+            color = (33, 44, 47)
+        }
+        rect(self.screen, color, box, 9)
+        rect(self.screen, MINT if selected else (74, 100, 90), box, 9, 2 if selected else 1)
+        left = box[0] + 17
+        if number is not None
+        {
+            rect(self.screen, (28, 44, 45), (left, box[1] + 10, 26, 26), 5)
+            lettering(self.screen, self.fonts["small"], str(number), (left + 13, box[1] + 23), MINT if enabled else (84, 103, 99), true)
+            left += 40
+        }
+        lettering(self.screen, self.fonts["body"], label, (left, box[1] + 12), CREAM if enabled else (109, 128, 122))
+        self.buttons.append((pygame.Rect(box), action, enabled))
+    }
+
+    def draw_title(self)
+    {
+        if self.title_backdrop is None
+        {
+            s = Story()
+            s.location = "district"
+            s.chapter = 3
+            s.upgrades = ["solar", "garden", "water", "battery"]
+            self.title_backdrop = pygame.transform.smoothscale(self.art.background(s), (1354, 800))
+        }
+        self.screen.blit(self.title_backdrop, (-20, 0))
+        tint = pygame.Surface((W, H), pygame.SRCALPHA)
+        tint.fill((12, 26, 33, 95))
+        self.screen.blit(tint, (0, 0))
+        panel(self.screen, (74, 90, 615, 600), (25, 42, 45), (107, 140, 113), 24)
+        lettering(self.screen, self.fonts["small"], "M U S H G A M E", (116, 129), MINT)
+        lettering(self.screen, self.fonts["hero"], "THE LAST", (108, 183), CREAM)
+        lettering(self.screen, self.fonts["hero"], "LITTLE SUN", (108, 257), GOLD)
+        paragraphs(self.screen, self.fonts["body"], "A mushroom. A kitchen. A city worth changing.", (116, 352), 510, (199, 210, 184), 5)
+        lettering(self.screen, self.fonts["small"], "Cook for your neighbors. Grow a rooftop.", (116, 429), (158, 181, 166))
+        lettering(self.screen, self.fonts["small"], "Find your voice in the heart of a dark city.", (116, 455), (158, 181, 166))
+        options = self.menu_options()
+        for i, option in enumerate(options)
+        {
+            self.button((113, 494 + i * 55, 534, 46), option["label"], option["action"], i == self.selection, true, i + 1)
+        }
+        # Nori, framed by a tiny stubborn garden in front of the towers.
+        ellipse(self.screen, (44, 65, 54), (782, 589, 320, 83))
+        for x, y, scale in [(787, 611, 1.2), (1100, 610, 1.3), (1060, 638, 0.7), (830, 655, 0.65)]
+        {
+            plant(self.screen, x, y, scale)
+        }
+        mushroom(self.screen, 945, 618, (217, 112, 88), 2.65, self.time, false, 1, true)
+        lettering(self.screen, self.fonts["small"], "NORI", (945, 698), CREAM, true)
+        lettering(self.screen, self.fonts["tiny"], "WASD move   •   E interact   •   1–5 choose   •   J journal   •   M sound", (W / 2, 757), CREAM, true)
+    }
+
+    def draw_world(self)
+    {
+        s = self.story
+        self.screen.blit(self.art.background(s), (-int(self.camera.x), -int(self.camera.y)))
+        targets = self.targets()
+        objects = [(target["pos"][1], "fixture", target) for target in targets]
+        objects.append((s.player.y, "player", None))
+        objects.sort(key=lambda item: item[0])
+        for y, kind, target in objects
+        {
+            if kind == "player"
+            {
+                x, py = s.player.x - self.camera.x, s.player.y - self.camera.y
+                mushroom(self.screen, x, py, (219, 117, 93), 0.95, self.time, self.moving, self.direction, true)
+                if s.carry
+                {
+                    dish(self.screen, x + self.direction * 25, py - 22, s.carry, 0.8)
+                }
+                elif s.prepared
+                {
+                    rect(self.screen, (136, 170, 110), (x + self.direction * 22 - 10, py - 27, 20, 12), 3)
+                }
+            }
+            elif target["kind"] == "customer"
+            {
+                c = target["customer"]
+                x, py = target["pos"][0] - self.camera.x, target["pos"][1] - self.camera.y
+                mushroom(self.screen, x, py - 10, c["color"], 0.85, self.time + c["id"], false, -1)
+                box = (x - 79, py - 131, 158, 34)
+                rect(self.screen, (35, 49, 48), box, 8)
+                lettering(self.screen, self.fonts["tiny"], RECIPES[c["order"]]["name"], (x, py - 113), GOLD, true)
+                pygame.draw.polygon(self.screen, (35, 49, 48), [(x - 4, py - 97), (x + 4, py - 97), (x, py - 91)])
+                lettering(self.screen, self.fonts["tiny"], c["name"], (x, py + 4), INK, true)
+            }
+            else
+            {
+                self.art.fixture(self.screen, target, s, self.camera, self.time)
+            }
+        }
+        # Drifting seeds inside, electric traffic and rain outside.
+        if s.location == "district"
+        {
+            if "transit" in s.reforms
+            {
+                tx = (self.time * 85) % 2500 - 260 - self.camera.x
+                ty = 905 - self.camera.y
+                rect(self.screen, (101, 161, 144), (tx, ty - 63, 175, 55), 12)
+                for dx in (14, 58, 102)
+                {
+                    rect(self.screen, (195, 220, 175), (tx + dx, ty - 53, 32, 25), 4)
+                }
+                for dx in (28, 142)
+                {
+                    pygame.draw.circle(self.screen, INK, (int(tx + dx), int(ty - 6)), 9)
+                }
+                line(self.screen, MINT, (tx + 5, ty - 63), (tx + 170, ty - 63), 3)
+            }
+            elif s.chapter >= 1
+            {
+                tx = (self.time * 120) % 2500 - 260 - self.camera.x
+                ty = 906 - self.camera.y
+                rect(self.screen, (66, 69, 83), (tx, ty - 44, 115, 36), 6)
+                rect(self.screen, (169, 105, 145), (tx + 15, ty - 40, 70, 14), 4)
+                for dx in (18, 90)
+                {
+                    pygame.draw.circle(self.screen, INK, (int(tx + dx), int(ty - 5)), 8)
+                }
+            }
+            if s.chapter in (1, 2, 3)
+            {
+                for i in range(34)
+                {
+                    rx = (i * 197 + self.time * 50) % W
+                    ry = (i * 109 + self.time * 330) % H
+                    line(self.screen, (154, 163, 173), (rx, ry), (rx - 4, ry + 11), 1)
+                }
+            }
+        }
+        if s.chapter == 4 or s.location == "kitchen"
+        {
+            for i in range(14)
+            {
+                x = (i * 149 + math.sin(self.time * 0.3 + i) * 30) % W
+                y = (i * 93 - self.time * 8) % H
+                pygame.draw.circle(self.screen, (193, 188, 131), (int(x), int(y)), 1)
+            }
+        }
+        target = self.nearest()
+        if target and self.mode == "play"
+        {
+            x, y = target["pos"][0] - self.camera.x, target["pos"][1] - self.camera.y
+            width = min(470, self.fonts["small"].size(target["name"])[0] + 60)
+            bx = max(12, min(W - width - 12, x - width / 2))
+            by = max(112, min(H - 151, y + 28))
+            panel(self.screen, (bx, by, width, 37), (28, 49, 45), MINT, 9)
+            lettering(self.screen, self.fonts["small"], "E", (bx + 12, by + 7), GOLD)
+            lettering(self.screen, self.fonts["small"], target["name"], (bx + 37, by + 7), CREAM)
+        }
+        self.draw_hud()
+        if self.transition > 0 and self.mode == "play"
+        {
+            alpha = min(255, int(self.transition * 180))
+            title = self.fonts["heading"].render(self.transition_name, true, CREAM)
+            title.set_alpha(alpha)
+            box = title.get_rect(center=(W / 2, 163))
+            backing = pygame.Surface((box.width + 40, 54), pygame.SRCALPHA)
+            rect(backing, (25, 43, 45, int(alpha * 0.9)), (0, 0, backing.get_width(), 54), 12)
+            self.screen.blit(backing, (box.x - 20, 140))
+            self.screen.blit(title, box)
+        }
+    }
+
+    def draw_hud(self)
+    {
+        s = self.story
+        panel(self.screen, (14, 12, 1252, 83), (26, 43, 45), (83, 111, 96), 14)
+        mushroom(self.screen, 53, 80, (218, 118, 94), 0.53, self.time, false, 1, true)
+        lettering(self.screen, self.fonts["small"], "NORI", (86, 28), GOLD)
+        lettering(self.screen, self.fonts["tiny"], {"kitchen": "THE LITTLE SUN", "district": "LUMEN DISTRICT", "hall": "CITY HALL"}[s.location], (86, 56), (165, 187, 166))
+        lettering(self.screen, self.fonts["heading"], str(s.coins), (274, 23), GOLD)
+        lettering(self.screen, self.fonts["tiny"], "COINS", (274, 61), (165, 187, 166))
+        lettering(self.screen, self.fonts["heading"], str(s.served), (378, 23), CREAM)
+        lettering(self.screen, self.fonts["tiny"], "MEALS", (378, 61), (165, 187, 166))
+        lettering(self.screen, self.fonts["heading"], str(s.trust), (480, 23), MINT)
+        lettering(self.screen, self.fonts["tiny"], "TRUST", (480, 61), (165, 187, 166))
+        line(self.screen, (79, 101, 92), (563, 27), (563, 80), 1)
+        goal, description = s.objective()
+        lettering(self.screen, self.fonts["body"], goal, (584, 24), CREAM)
+        text = "CHAPTER " + str(s.chapter + 1) + " • " + CHAPTERS[s.chapter] + "   [J] journal & map"
+        lettering(self.screen, self.fonts["tiny"], text, (585, 59), (160, 188, 164))
+        # Stable bottom bar keeps the controls and next action in view.
+        panel(self.screen, (14, H - 82, 1252, 68), (26, 43, 45), (83, 111, 96), 12)
+        lettering(self.screen, self.fonts["small"], "WASD move   Shift walk faster   E interact   J journal   Esc pause", (34, H - 66), CREAM)
+        lettering(self.screen, self.fonts["tiny"], description, (34, H - 37), (168, 191, 169))
+        if s.carry or s.prepared or s.cooking
+        {
+            recipe = s.carry or s.prepared or s.cooking
+            label = "Carrying: " if s.carry else "Prepared: " if s.prepared else "Stove ready: " if s.cook_remaining == 0 else "Cooking: "
+            label += RECIPES[recipe]["name"]
+            panel(self.screen, (18, 105, 330, 43), (31, 52, 46), (105, 145, 112), 10)
+            dish(self.screen, 44, 127, recipe, 0.6)
+            lettering(self.screen, self.fonts["small"], label, (68, 116), GOLD)
+        }
+        if s.notice_time > 0
+        {
+            width = min(1130, self.fonts["small"].size(s.notice)[0] + 42)
+            panel(self.screen, ((W - width) / 2, H - 133, width, 39), (46, 73, 58), MINT, 10)
+            lettering(self.screen, self.fonts["small"], s.notice, (W / 2, H - 114), CREAM, true)
+        }
+        if self.mode == "play"
+        {
+            self.draw_waypoint()
+        }
+    }
+
+    def veil(self, alpha=175)
+    {
+        surface = pygame.Surface((W, H), pygame.SRCALPHA)
+        surface.fill((9, 22, 29, alpha))
+        self.screen.blit(surface, (0, 0))
+    }
+
+    def draw_dialogue(self)
+    {
+        self.veil(125)
+        d = self.dialogue
+        option_height = len(d["options"]) * 54
+        body_lines = wrap(self.fonts["body"], d["body"], 950)
+        body_height = len(body_lines) * (self.fonts["body"].get_linesize() + 6)
+        height = min(720, 156 + body_height + option_height)
+        top = (H - height) / 2
+        panel(self.screen, (115, top, 1050, height), (29, 47, 46), (137, 171, 130), 22)
+        lettering(self.screen, self.fonts["tiny"], d["subtitle"], (151, top + 23), MINT)
+        lettering(self.screen, self.fonts["heading"], d["speaker"], (151, top + 49), GOLD)
+        body_end = paragraphs(self.screen, self.fonts["body"], d["body"], (151, top + 96), 950, CREAM, 6)
+        for i, option in enumerate(d["options"])
+        {
+            self.button((151, body_end + 20 + i * 54, 975, 46), option["label"], option["action"], i == self.selection, option["enabled"], i + 1)
+        }
+        lettering(self.screen, self.fonts["tiny"], "Choose with 1–5, arrows + Enter, or click. Esc returns to the world.", (W / 2, top + height - 19), (142, 170, 150), true)
+    }
+
+    def draw_pause(self)
+    {
+        self.veil()
+        panel(self.screen, (390, 130, 500, 540), (29, 47, 46), (137, 171, 130), 22)
+        lettering(self.screen, self.fonts["title"], "A moment to breathe", (W / 2, 190), GOLD, true)
+        lettering(self.screen, self.fonts["small"], "Your kitchen and story are paused.", (W / 2, 239), (163, 189, 167), true)
+        for i, option in enumerate(self.menu_options())
+        {
+            self.button((428, 284 + i * 59, 424, 48), option["label"], option["action"], i == self.selection, true, i + 1)
+        }
+        lettering(self.screen, self.fonts["tiny"], "Auto-save every 45 seconds and at story milestones.", (W / 2, 634), (142, 170, 150), true)
+    }
+
+    def draw_journal(self)
+    {
+        self.veil(190)
+        panel(self.screen, (70, 70, 1140, 660), (32, 48, 46), (132, 161, 126), 18)
+        lettering(self.screen, self.fonts["title"], "Nori's field notes", (106, 99), GOLD)
+        lettering(self.screen, self.fonts["tiny"], "DAY " + str(self.story.day) + " • A CITY IS A RECIPE", (107, 147), MINT)
+        for i, label in enumerate(("Story & quests", "Kitchen guide", "Neighborhood map"))
+        {
+            self.button((107 + i * 350, 185, 331, 45), label, "tab:" + str(i), i == self.journal_tab, true, i + 1)
+        }
+        if self.journal_tab == 0
+        {
+            self.draw_quests()
+        }
+        elif self.journal_tab == 1
+        {
+            self.draw_kitchen_guide()
+        }
+        else
+        {
+            self.draw_map()
+        }
+        self.button((1000, 671, 168, 40), "Close [J]", "close", false, true)
+        lettering(self.screen, self.fonts["tiny"], "Use Left / Right or 1 / 2 / 3 to switch pages. J or Esc to close.", (109, 686), (150, 179, 159))
+    }
+
+    def checklist(self, label, done, x, y)
+    {
+        rect(self.screen, (69, 91, 78) if done else (37, 57, 53), (x, y + 3, 17, 17), 4)
+        rect(self.screen, MINT if done else (120, 138, 115), (x, y + 3, 17, 17), 4, 1)
+        if done
+        {
+            line(self.screen, MINT, (x + 4, y + 11), (x + 8, y + 15), 2)
+            line(self.screen, MINT, (x + 8, y + 15), (x + 14, y + 6), 2)
+        }
+        lettering(self.screen, self.fonts["small"], label, (x + 28, y), (182, 201, 174) if done else CREAM)
+    }
+
+    def draw_quests(self)
+    {
+        s = self.story
+        goal, description = s.objective()
+        lettering(self.screen, self.fonts["heading"], "Chapter " + str(s.chapter + 1), (110, 255), MINT)
+        lettering(self.screen, self.fonts["body"], CHAPTERS[s.chapter], (110, 299), GOLD)
+        paragraphs(self.screen, self.fonts["body"], description, (110, 348), 405, CREAM, 7)
+        summary = "A small kitchen becomes a working example. A working example becomes a petition. A petition becomes a voice in government."
+        if s.chapter == 4
+        {
+            summary = "Your story is complete. Explore the green city and keep the kitchen open. A " + ("Commons" if s.flags.get("ending") == "commons" else "Renewal") + " Charter shapes its future."
+        }
+        paragraphs(self.screen, self.fonts["small"], summary, (110, 498), 410, (155, 183, 160), 5)
+        line(self.screen, (87, 111, 94), (549, 258), (549, 640), 1)
+        if s.chapter < 3
+        {
+            lettering(self.screen, self.fonts["heading"], "A working example", (580, 256), CREAM)
+            goals = [("Serve 3 customers", s.served >= 3), ("Install your first shop upgrade", len(s.upgrades) >= 1), ("Jun signs the petition", bool(s.flags.get("jun_signature"))), ("Mira signs the petition", bool(s.flags.get("mira_signature"))), ("Serve 6 customers", s.served >= 6), ("Install 2 shop upgrades", len(s.upgrades) >= 2), ("Get a permit from Vale", bool(s.flags.get("permit"))), ("Accept Sable's appointment", bool(s.flags.get("appointment")))]
+            for i, (label, done) in enumerate(goals)
+            {
+                self.checklist(label, done, 584, 313 + i * 37)
+            }
+        }
+        else
+        {
+            y = 253
+            for kind in ("energy", "food", "transit")
+            {
+                lettering(self.screen, self.fonts["body"], kind.upper() + (" • ADOPTED" if kind in s.reforms else " • EVIDENCE NEEDED"), (580, y), MINT if kind in s.reforms else GOLD)
+                y += 37
+                for label, done in self.requirements(kind)
+                {
+                    self.checklist(label, done, 583, y)
+                    y += 29
+                }
+                y += 14
+            }
+        }
+    }
+
+    def draw_kitchen_guide(self)
+    {
+        s = self.story
+        lettering(self.screen, self.fonts["heading"], "The rhythm of the kitchen", (110, 255), GOLD)
+        steps = ["1  Read a customer's order [E]", "2  Chopping table > choose a recipe", "3  Stove > start cooking [E]", "4  Stove > collect the finished dish [E]", "5  Customer > serve [E]"]
+        for i, step in enumerate(steps)
+        {
+            lettering(self.screen, self.fonts["small"], step, (112, 315 + i * 37), CREAM)
+        }
+        paragraphs(self.screen, self.fonts["small"], "Ingredients are free. Customers wait patiently. You can prepare a second dish while the stove cooks. Your blueprint board turns meals into technology.", (113, 520), 416, (161, 187, 159), 5)
+        line(self.screen, (87, 111, 94), (549, 258), (549, 640), 1)
+        for i, (key, info) in enumerate(RECIPES.items())
+        {
+            y = 265 + i * 91
+            known = key in s.known_recipes()
+            dish(self.screen, 615, y + 28, key, 1.1)
+            lettering(self.screen, self.fonts["body"], info["name"], (660, y), GOLD if known else (125, 145, 130))
+            description = str(info["price"]) + " coins • " + info["description"] if known else "Unlock with " + ("Living roof" if key == "garden" else "Rainwater loop")
+            paragraphs(self.screen, self.fonts["small"], description, (660, y + 34), 472, (180, 196, 173), 3)
+        }
+    }
+
+    def draw_map(self)
+    {
+        lettering(self.screen, self.fonts["heading"], "Lumen, your neighborhood", (109, 251), GOLD)
+        rect(self.screen, (62, 87, 82), (110, 301, 708, 325), 15)
+        rect(self.screen, (44, 71, 80), (120, 585, 688, 31), 7)
+        rect(self.screen, (42, 57, 65), (125, 457, 678, 42), 4)
+        for x in range(135, 790, 40)
+        {
+            line(self.screen, GOLD, (x, 478), (x + 18, 478), 2)
+        }
+        for x, y, w, h, color in [(142, 337, 157, 113, (176, 144, 104)), (660, 330, 120, 98, (101, 123, 133)), (361, 333, 80, 110, (77, 95, 108)), (463, 319, 65, 124, (71, 86, 110)), (554, 341, 66, 102, (71, 86, 110))]
+        {
+            rect(self.screen, color, (x, y, w, h), 5)
+        }
+        lettering(self.screen, self.fonts["small"], "Kitchen", (219, 390), INK, true)
+        lettering(self.screen, self.fonts["small"], "City Hall", (720, 373), CREAM, true)
+        for x, y, name, color in [(352, 551, "Jun", (140, 176, 114)), (492, 529, "Mira", PINK), (622, 551, "Tess", (133, 174, 191)), (472, 442, "Vale", (114, 129, 151))]
+        {
+            mushroom(self.screen, x, y, color, 0.4)
+            lettering(self.screen, self.fonts["tiny"], name, (x, y + 16), CREAM, true)
+        }
+        if self.story.location == "district"
+        {
+            x = 125 + self.story.player.x / 2200 * 680
+            y = 330 + (self.story.player.y - 570) / 730 * 270
+            pygame.draw.circle(self.screen, GOLD, (int(x), int(y)), 6)
+            pygame.draw.circle(self.screen, CREAM, (int(x), int(y)), 10, 1)
+        }
+        lettering(self.screen, self.fonts["body"], "Who to find", (861, 306), CREAM)
+        notes = "Jun • gardens and the petition\nMira • night workers and transit\nTess • solar grid engineering\nVale • kitchen permit\nSable • council appointment"
+        paragraphs(self.screen, self.fonts["small"], notes, (861, 352), 295, (180, 202, 177), 10)
+        paragraphs(self.screen, self.fonts["small"], "Go through your kitchen's front door. Walk right along the street to reach City Hall.", (861, 563), 291, MINT, 4)
+    }
+
+    def draw(self)
+    {
+        self.buttons = []
+        if self.mode == "title"
+        {
+            self.draw_title()
+        }
+        else
+        {
+            self.draw_world()
+            if self.mode == "dialogue"
+            {
+                self.draw_dialogue()
+            }
+            elif self.mode == "pause"
+            {
+                self.draw_pause()
+            }
+            elif self.mode == "journal"
+            {
+                self.draw_journal()
+            }
+        }
+        ww, wh = self.window.get_size()
+        scale = min(ww / W, wh / H)
+        scaled = pygame.transform.smoothscale(self.screen, (max(1, int(W * scale)), max(1, int(H * scale))))
+        self.window.fill((12, 22, 28))
+        self.window.blit(scaled, ((ww - scaled.get_width()) / 2, (wh - scaled.get_height()) / 2))
+        pygame.display.flip()
+    }
+
+    def run(self, smoke=false, screenshot=None)
+    {
+        frames = 0
+        while self.running
+        {
+            dt = min(0.05, self.clock.tick(60) / 1000)
+            for event in pygame.event.get()
+            {
+                self.handle_event(event)
+            }
+            self.update(dt)
+            self.draw()
+            frames += 1
+            if smoke and frames >= 8
+            {
+                if screenshot
+                {
+                    pygame.image.save(self.screen, screenshot)
+                }
+                self.running = false
+            }
+        }
+        pygame.quit()
+    }
+}
+
+def main()
+{
+    screenshot = None
+    if "--screenshot" in sys.argv
+    {
+        index = sys.argv.index("--screenshot")
+        if index + 1 < len(sys.argv)
+        {
+            screenshot = sys.argv[index + 1]
+        }
+    }
+    game = Game("--smoke-test" in sys.argv)
+    game.run("--smoke-test" in sys.argv, screenshot)
+}
+
+if __name__ == "__main__"
+{
+    main()
+}

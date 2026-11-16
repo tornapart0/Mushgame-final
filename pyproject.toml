@@ -1,0 +1,35 @@
+[build-system]
+requires = ["hatchling>=1.26"]
+build-backend = "hatchling.build"
+
+[project]
+name = "mushgame-demo"
+version = "0.1.0"
+description = "A mushroom kitchen story about turning a cyberpunk city into a solarpunk community"
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [{name = "Taylan"}]
+dependencies = ["pygame-ce==2.5.8"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Topic :: Games/Entertainment",
+  "Programming Language :: Python :: 3",
+]
+
+[project.urls]
+Source = "https://github.com/tornapart0/Mushgame"
+
+[project.scripts]
+mushgame-demo = "mushgame_demo:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/mushgame_demo"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"main.mylang" = "mushgame_demo/main.mylang"
+"interpreter.py" = "mushgame_demo/interpreter.py"
+"mylang" = "mushgame_demo/mylang"
+
+[tool.hatch.build.targets.sdist]
+include = ["src", "main.mylang", "interpreter.py", "mylang", "test_story.mylang", "pyproject.toml", "README.md", "PUBLISHING.md"]
+exclude = ["**/__pycache__", "**/*.pyc"]
